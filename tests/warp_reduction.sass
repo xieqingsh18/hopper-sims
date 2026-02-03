@@ -1,0 +1,97 @@
+// Warp Reduction Example
+// Demonstrates parallel reduction across warp threads
+// This is a fundamental pattern in GPU programming
+
+.section .text
+
+// ==================== Problem Setup ====================
+// Each lane in the warp has a value
+// We want to compute the sum of all values across the warp
+// This is done using shuffle operations for efficient communication
+
+// Simulate input values (in real GPU, these would come from memory or computation)
+MOV R0, 1           // Lane 0: value 1
+MOV R1, 2           // Lane 1: value 2
+MOV R2, 3           // Lane 2: value 3
+MOV R3, 4           // Lane 3: value 4
+MOV R4, 5           // Lane 4: value 5
+MOV R5, 6           // Lane 5: value 6
+MOV R6, 7           // Lane 6: value 6
+MOV R7, 8           // Lane 7: value 8
+
+// Copy initial value to accumulator
+MOV R16, R0         // R16 will hold the running sum
+
+// ==================== Parallel Reduction Using Shuffle ====================
+// The classic warp reduction pattern:
+// 1. Shuffle-add with increasing offsets (1, 2, 4, 8, 16)
+// 2. Each step combines values from pairs of lanes
+// 3. Final result is in lane 0
+
+// Step 1: Offset 1 (combine adjacent pairs)
+// Lane 0 + Lane 1, Lane 2 + Lane 3, etc.
+SHFL R17, R16, R0, 1  // Get value from lane+1
+IADD R16, R16, R17     // Add to accumulator
+
+// Step 2: Offset 2
+// Now combine results from step 1
+SHFL R17, R16, R0, 2  // Get value from lane+2
+IADD R16, R16, R17     // Add to accumulator
+
+// Step 3: Offset 4
+SHFL R17, R16, R0, 4  // Get value from lane+4
+IADD R16, R16, R17     // Add to accumulator
+
+// Step 4: Offset 8
+SHFL R17, R16, R0, 8  // Get value from lane+8
+IADD R16, R16, R17     // Add to accumulator
+
+// Step 5: Offset 16
+SHFL R17, R16, R0, 16 // Get value from lane+16
+IADD R16, R16, R17     // Add to accumulator
+
+// At this point, R16 in lane 0 contains the sum of all 32 lanes
+// For our test with 8 values: 1+2+3+4+5+6+7+8 = 36
+
+// ==================== Broadcast Result ====================
+// Broadcast the result from lane 0 to all other lanes
+SHFL R20, R16, R0, 0  // All lanes get value from lane 0
+
+// ==================== Alternative: Use REDUX ====================
+// The REDUX instruction provides built-in reduction
+MOV R30, 10         // Reset test values
+MOV R31, 20
+MOV R32, 30
+MOV R33, 40
+
+REDUX R40, R30, 0   // Reduce across warp (operation 0 = add)
+// Result in all lanes
+
+// ==================== Store Results ====================
+// Store reduction results
+MOV R100, 0x4000    // Output base address
+
+STG [R100+0], R16   // Manual reduction result
+STG [R100+4], R20   // Broadcast result
+STG [R100+8], R40   // REDUX result
+
+// ==================== Verify with Direct Computation ====================
+// For verification, compute sum directly
+MOV R50, 1          // Start with 1
+IADD R50, R50, 2     // +2 = 3
+IADD R50, R50, 3     // +3 = 6
+IADD R50, R50, 4     // +4 = 10
+IADD R50, R50, 5     // +5 = 15
+IADD R50, R50, 6     // +6 = 21
+IADD R50, R50, 7     // +7 = 28
+IADD R50, R50, 8     // +8 = 36
+
+STG [R100+12], R50  // Expected result: 36
+
+EXIT
+
+// Expected Output:
+// R16 = 36 (in lane 0, sum of 1+2+3+4+5+6+7+8)
+// R20 = 36 (broadcast to all lanes)
+// R40 = depends on REDUX implementation
+// R50 = 36 (direct computation verification)

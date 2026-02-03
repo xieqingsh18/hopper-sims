@@ -1,0 +1,32 @@
+// Tensor Core Test Program
+// Demonstrates HMMA (Matrix Multiply-Accumulate) operation
+
+// Hopper supports FP8 x FP8 -> FP32 matrix operations
+// This is a simplified test showing the basic operation
+
+// Initialize matrix fragment A (FP8 values)
+MOV R0, 1           // A[0] = 1.0
+MOV R1, 2           // A[1] = 2.0
+MOV R2, 3           // A[2] = 3.0
+MOV R3, 4           // A[3] = 4.0
+
+// Initialize matrix fragment B (FP8 values)
+MOV R10, 5          // B[0] = 5.0
+MOV R11, 6          // B[1] = 6.0
+MOV R12, 7          // B[2] = 7.0
+MOV R13, 8          // B[3] = 8.0
+
+// Initialize accumulator C (FP32)
+MOV R20, 0          // C[0] = 0.0
+MOV R21, 0          // C[1] = 0.0
+MOV R22, 0          // C[2] = 0.0
+MOV R23, 0          // C[3] = 0.0
+
+// Execute Tensor Core HMMA operation
+// D = A * B + C
+// For lane 0: D[0] = A[0] * B[0] + C[0] = 1.0 * 5.0 + 0.0 = 5.0
+HMMA R30, R0, R10, R20
+
+// Result should be in R30-R33 (destination fragment D)
+
+EXIT

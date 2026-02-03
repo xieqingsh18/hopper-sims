@@ -1,0 +1,115 @@
+// Warp Synchronization Demo
+// Demonstrates warp-level synchronization and communication operations
+
+.section .text
+
+// ==================== Initialization ====================
+// Each lane sets its unique value (lane ID)
+MOV R0, 0           // Will hold lane ID
+
+// Simulate different lane IDs by setting different values
+// In a real GPU, each thread would have a different built-in lane ID
+// For simulation, we'll simulate this with manual values
+
+// Setup: some lanes active, some inactive for demonstration
+// Lane 0: value 10
+// Lane 1: value 20
+// Lane 2: value 30
+// Lane 3: value 40
+// (In real execution, lane 0 is running, so we use its values)
+
+// ==================== Active Mask Demo ====================
+// Get the active lane mask
+ACTIVEMASK R1       // R1 = mask of active lanes (all 32 bits set)
+// Result: R1 = 0xFFFFFFFF (all lanes active)
+
+// ==================== Election Demo ====================
+// Elect one thread from the warp
+ELECT R2            // R2 = 1 for elected lane, 0 for others
+// The lowest active lane (lane 0) gets elected
+// Result: R2 = 1 for lane 0, 0 for others
+
+// ==================== Vote Demo ====================
+// Set different predicate values for demonstration
+SETP P0, R0, R1     // P0 = (R0 < R1) = (0 < 0xFFFFFFFF) = true
+
+// Vote across the warp
+VOTE R3, P0         // R3 = mask of lanes where P0 is true
+// Result: R3 = 0xFFFFFFFF (all lanes voted true)
+
+// ==================== Shuffle Demo ====================
+// Setup test values for shuffle
+MOV R10, 100        // Base value
+MOV R11, 200        // Second value
+MOV R12, 300        // Third value
+MOV R13, 400        // Fourth value
+
+// Demo: Shuffle up (move data between lanes)
+// SHFL R14, R10, R0, 1  // Shuffle with delta=1
+// Each lane gets value from (lane_id + delta)
+// Lane 0 gets value from lane 1, etc.
+
+// Simulated shuffle: rotate values through lanes
+SHFL R14, R10, R0, 1  // R14 gets shuffled value
+
+// ==================== Barrier Demo ====================
+// Synchronize all lanes in the warp
+BAR 0               // Barrier ID 0
+// All lanes wait here until all reach this point
+// In our single-warp simulation, this is a no-op
+
+// Warp-level barrier (implicit synchronization)
+BAR.WARP
+
+// ==================== Reduction Demo ====================
+// Reduce values across warp
+MOV R20, 10         // Each lane has a value
+MOV R21, 20
+MOV R22, 30
+MOV R23, 40
+
+// Perform reduction (sum all values across lanes)
+REDUX R30, R20, 0   // R30 = reduced value
+// Simplified: broadcasts lane 0's value
+// Real hardware would perform actual reduction
+
+// ==================== Memory Fence Demo ====================
+// Ensure all memory operations are visible
+MEMBAR 0            // Memory fence (GL: Global-Local)
+
+// ==================== Store Results ====================
+// Store all demonstration results
+MOV R100, 0x3000    // Base address for results
+
+STG [R100+0], R1    // Active mask
+STG [R100+4], R2    // Election result
+STG [R100+8], R3    // Vote result
+STG [R100+12], R14  // Shuffle result
+STG [R100+16], R30  // Reduction result
+
+// ==================== Complex Synchronization Pattern ====================
+// Demonstrate a common pattern: compute partial sums, synchronize, continue
+
+// Phase 1: Each lane computes its partial value
+MOV R40, 1          // Each lane adds 1
+MOV R41, 1
+MOV R42, 1
+MOV R43, 1
+
+// Synchronize before phase 2
+BAR 1
+
+// Phase 2: Continue computation
+IADD R50, R40, R1   // Add active mask to partial sum
+IADD R51, R41, R2   // Add election result
+IADD R52, R42, R3   // Add vote result
+
+// Final barrier
+BAR 2
+
+// Store phase 2 results
+STG [R100+32], R50
+STG [R100+36], R51
+STG [R100+40], R52
+
+EXIT

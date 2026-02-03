@@ -1,0 +1,125 @@
+// Comprehensive Test Program
+// Tests expanded instruction set based on PTX ISA
+
+.section .text
+
+// ==================== Integer Operations ====================
+// Initialize test values
+MOV R1, 100        // Test value A
+MOV R2, 25         // Test value B
+MOV R3, -50        // Negative test value (as two's complement: 0xFFFFFFCE)
+
+// Arithmetic operations
+IADD R4, R1, R2    // R4 = 100 + 25 = 125
+ISUB R5, R1, R2    // R5 = 100 - 25 = 75
+IMUL R6, R2, 3     // R6 = 25 * 3 = 75
+IMIN R7, R1, R2    // R7 = min(100, 25) = 25
+IMAX R8, R1, R2    // R8 = max(100, 25) = 100
+IABS R9, R3        // R9 = |-50| = 50
+INEG R10, R1       // R10 = -100
+
+// Bit manipulation
+POPC R11, R1       // R11 = popcount(100) = 3
+CLZ R12, R1        // R12 = clz(100) = 25
+AND R13, R1, R2    // R13 = 100 & 25 = 0
+OR R14, R1, R2     // R14 = 100 | 25 = 125
+XOR R15, R1, R2    // R15 = 100 ^ 25 = 125
+NOT R16, R1        // R16 = ~100
+
+// Shift operations
+SHL R17, R1, 2     // R17 = 100 << 2 = 400
+SHR R18, R1, 2     // R18 = 100 >> 2 = 25
+
+// ==================== Floating Point Operations ====================
+// Initialize float values
+MOV R20, 0x40490fdb  // ~3.14159 (pi)
+MOV R21, 0x40000000  // 2.0
+MOV R22, 0x40800000  // 4.0
+MOV R23, 0xC0000000  // -2.0
+
+FADD R24, R20, R21  // R24 = pi + 2.0
+FSUB R25, R20, R21  // R25 = pi - 2.0
+FMUL R26, R21, R22  // R26 = 2.0 * 4.0 = 8.0
+FFMA R27, R21, R22, R20  // R27 = 2.0 * 4.0 + pi
+
+FNEG R28, R20       // R28 = -pi
+FABS R29, R28       // R29 = |-pi| = pi
+FMIN R30, R20, R21  // R30 = min(pi, 2.0) = 2.0
+FMAX R31, R20, R21  // R31 = max(pi, 2.0) = pi
+
+// ==================== Memory Operations ====================
+// Setup memory address
+MOV R40, 0x1000
+
+// Store values to global memory
+STG [R40], R4       // Store R4 to address 0x1000
+STG [R40+4], R5     // Store R5 to address 0x1004
+
+// Load from global memory
+LDG R41, [R40]      // Load from 0x1000
+LDG R42, [R40+4]    // Load from 0x1004
+
+// Store to shared memory
+STS [R40], R6       // Store R6 to shared memory
+
+// Load from shared memory
+LDS R43, [R40]      // Load from shared memory
+
+// ==================== Warp-Level Operations ====================
+ACTIVEMASK R50      // Get active lane mask (should be 0xFFFFFFFF)
+ELECT R51           // Elect one thread (lane 0 gets 1, others 0)
+
+// Test SHFL (shuffle)
+MOV R52, 100        // Source value
+SHFL R53, R52, R0, 1  // Shuffle with delta=1
+
+// ==================== Predicate Operations ====================
+// Compare values
+SETP P0, R1, R2     // Set predicate: R1 < R2 (100 < 25 = false)
+@P0 MOV R60, 1      // This won't execute (predicate false)
+@!P0 MOV R60, 2     // This will execute
+@P0 MOV R61, 3
+@!P0 MOV R61, 4
+
+// ==================== Store Results ====================
+// Store all test results to memory for verification
+MOV R100, 0x2000
+STG [R100+0], R4
+STG [R100+4], R5
+STG [R100+8], R6
+STG [R100+12], R7
+STG [R100+16], R8
+STG [R100+20], R9
+STG [R100+24], R10
+STG [R100+28], R11
+STG [R100+32], R12
+STG [R100+36], R13
+STG [R100+40], R14
+STG [R100+44], R15
+STG [R100+48], R16
+STG [R100+52], R17
+STG [R100+56], R18
+
+// Float results
+STG [R100+80], R24
+STG [R100+84], R25
+STG [R100+88], R26
+STG [R100+92], R27
+STG [R100+96], R28
+STG [R100+100], R29
+STG [R100+104], R30
+STG [R100+108], R31
+
+// Memory and warp results
+STG [R100+128], R41
+STG [R100+132], R42
+STG [R100+136], R43
+STG [R100+140], R50
+STG [R100+144], R51
+STG [R100+148], R53
+
+// Predicate results
+STG [R100+160], R60
+STG [R100+164], R61
+
+EXIT

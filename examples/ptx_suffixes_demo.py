@@ -11,9 +11,6 @@ Demonstrates the parsing and handling of PTX instruction suffixes including:
 - Vector width (.x1, .x2, .x4)
 """
 
-import sys
-sys.path.insert(0, '/Users/xieq/claude/hopper')
-
 from src.isa.decoder import InstructionDecoder
 from src.isa.suffixes import (
     TypeSuffix, MemorySpace, SyncModifier, MemoryScope,

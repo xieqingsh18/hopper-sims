@@ -10,6 +10,8 @@ from ctypes import c_int32, c_uint32
 from ..core.warp import Warp
 from ..core.memory import Memory, MemorySpace
 from ..core.thread import ThreadState
+from ..core.async_ops import AsyncQueue, AsyncOperation, AsyncOpType
+from ..core.mbarrier import MbarrierManager
 from ..isa.decoder import Instruction
 from ..isa.instructions import (
     Opcode, is_tensor_instruction, is_load_instruction, is_store_instruction,
@@ -37,16 +39,29 @@ class WarpExecutor:
     - Tensor Core operations
     """
 
-    def __init__(self, warp: Warp, memory: Memory) -> None:
+    def __init__(self, warp: Warp, memory: Memory,
+                 async_queue: Optional[AsyncQueue] = None,
+                 mbarrier_manager: Optional[MbarrierManager] = None) -> None:
         """
         Initialize warp executor.
 
         Args:
             warp: The warp to execute
             memory: GPU memory subsystem
+            async_queue: Optional async operation queue for TMA/WGMMA
+            mbarrier_manager: Optional mbarrier manager for synchronization
         """
         self.warp = warp
         self.memory = memory
+
+        # Async operation queue (shared across all executors)
+        self.async_queue = async_queue or AsyncQueue(num_units=4)
+
+        # Mbarrier manager for synchronizing async operations
+        self.mbarrier_manager = mbarrier_manager or MbarrierManager()
+
+        # Track active mbarrier for async operations (set by MBARRIER_EXPECT_TX)
+        self.active_mbarrier_addr: Optional[int] = None
 
         # Statistics
         self.instructions_executed = 0
@@ -165,6 +180,20 @@ class WarpExecutor:
             elif opcode == Opcode.SELP:
                 self._exec_selp(instruction)
 
+            # ==================== Warp Specialization (Hopper) ====================
+            # Check these BEFORE generic barrier instruction check
+            elif is_tma_instruction(opcode):
+                self._exec_tma(instruction)
+            elif is_wgmma_instruction(opcode):
+                self._exec_wgmma(instruction)
+            elif opcode in {Opcode.MBARRIER_INIT, Opcode.MBARRIER_INIT_DOT,
+                           Opcode.MBARRIER_INVAL, Opcode.MBARRIER_INVAL_DOT,
+                           Opcode.MBARRIER_ARRIVE, Opcode.MBARRIER_ARRIVE_DOT,
+                           Opcode.MBARRIER_TEST_WAIT, Opcode.MBARRIER_TEST_WAIT_DOT,
+                           Opcode.MBARRIER_EXPECT_TX, Opcode.MBARRIER_EXPECT_TX_DOT,
+                           Opcode.MBARRIER_COMPLETE_TX, Opcode.MBARRIER_COMPLETE_TX_DOT}:
+                self._exec_mbarrier(instruction)
+
             # ==================== Warp Level ====================
             elif is_barrier_instruction(opcode):
                 self._exec_barrier(instruction)
@@ -186,19 +215,6 @@ class WarpExecutor:
             # ==================== Tensor Core ====================
             elif is_tensor_instruction(opcode):
                 self._exec_tensor(instruction)
-
-            # ==================== Warp Specialization (Hopper) ====================
-            elif is_tma_instruction(opcode):
-                self._exec_tma(instruction)
-            elif is_wgmma_instruction(opcode):
-                self._exec_wgmma(instruction)
-            elif opcode in {Opcode.MBARRIER_INIT, Opcode.MBARRIER_INIT_DOT,
-                           Opcode.MBARRIER_INVAL, Opcode.MBARRIER_INVAL_DOT,
-                           Opcode.MBARRIER_ARRIVE, Opcode.MBARRIER_ARRIVE_DOT,
-                           Opcode.MBARRIER_TEST_WAIT, Opcode.MBARRIER_TEST_WAIT_DOT,
-                           Opcode.MBARRIER_EXPECT_TX, Opcode.MBARRIER_EXPECT_TX_DOT,
-                           Opcode.MBARRIER_COMPLETE_TX, Opcode.MBARRIER_COMPLETE_TX_DOT}:
-                self._exec_mbarrier(instruction)
 
             # ==================== Existing Fallback ====================
             elif opcode == Opcode.FSETP:
@@ -916,6 +932,12 @@ class WarpExecutor:
 
         TMA enables efficient bulk data transfer between global and shared memory
         with hardware-accelerated address translation and strided access.
+
+        TMA operations are ASYNCHRONOUS - they run in the background while
+        the warp continues executing other instructions.
+
+        When paired with mbarrier, TMA operations signal completion via
+        mbarrier.complete_tx(), allowing consumer warps to wait efficiently.
         """
         if instr.opcode == Opcode.TMA_LOAD:
             # TMA.LOAD: Load matrix tile from global to shared memory
@@ -924,41 +946,82 @@ class WarpExecutor:
             global_addr_str = instr.operands[1].value
             tile_size = instr.operands[2].value if len(instr.operands) > 2 else 256
 
-            # For each lane, perform the TMA load
-            for lane_id in self.warp.get_executing_lane_ids():
-                # Compute addresses
-                shared_base = self._compute_address(shared_addr_str, lane_id)
-                global_base = self._compute_address(global_addr_str, lane_id)
+            # Get the first executing lane's addresses (TMA is warp-wide)
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            shared_base = self._compute_address(shared_addr_str, lane_id)
+            global_base = self._compute_address(global_addr_str, lane_id)
 
-                # Simulate TMA: copy tile from global to shared memory
-                # In real hardware, this would be done asynchronously by TMA unit
-                for offset in range(0, tile_size, 4):
-                    global_addr = global_base + offset
-                    shared_addr = shared_base + offset
+            # Create async TMA load operation with mbarrier signaling
+            def tma_load_complete(op: AsyncOperation) -> None:
+                """Callback when TMA load completes."""
+                # Perform the actual data transfer
+                for offset in range(0, op.size, 4):
+                    global_addr = op.src_addr + offset
+                    shared_addr = op.dst_addr + offset
                     value = self.memory.read_u32(MemorySpace.GLOBAL, global_addr)
                     self.memory.write_u32(MemorySpace.SHARED, shared_addr, value)
 
+                # Signal mbarrier completion if mbarrier_addr is set
+                if hasattr(op, 'mbarrier_addr') and op.mbarrier_addr is not None:
+                    self.mbarrier_manager.complete_tx(op.mbarrier_addr)
+
+            # Create and submit async operation
+            tma_op = self.async_queue.create_tma_load(
+                dst_addr=shared_base,
+                src_addr=global_base,
+                size=tile_size,
+                warp_id=self.warp.warp_id,
+                cycles=50  # Simulation: 50 cycles to complete
+            )
+            tma_op.callback = tma_load_complete
+            # Link to active mbarrier if set
+            if self.active_mbarrier_addr is not None:
+                tma_op.mbarrier_addr = self.active_mbarrier_addr
+            self.async_queue.submit(tma_op)
+
         elif instr.opcode == Opcode.TMA_STORE:
             # TMA.STORE: Store matrix tile from shared to global memory
-            shared_addr_str = instr.operands[0].value
-            global_addr_str = instr.operands[1].value
+            # Format: TMA.STORE [global_dst], [shared_src], size
+            global_addr_str = instr.operands[0].value
+            shared_addr_str = instr.operands[1].value
             tile_size = instr.operands[2].value if len(instr.operands) > 2 else 256
 
-            for lane_id in self.warp.get_executing_lane_ids():
-                shared_base = self._compute_address(shared_addr_str, lane_id)
-                global_base = self._compute_address(global_addr_str, lane_id)
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            global_base = self._compute_address(global_addr_str, lane_id)
+            shared_base = self._compute_address(shared_addr_str, lane_id)
 
-                # Copy tile from shared to global memory
-                for offset in range(0, tile_size, 4):
-                    shared_addr = shared_base + offset
-                    global_addr = global_base + offset
+            # Create async TMA store operation with mbarrier signaling
+            def tma_store_complete(op: AsyncOperation) -> None:
+                """Callback when TMA store completes."""
+                for offset in range(0, op.size, 4):
+                    shared_addr = op.src_addr + offset
+                    global_addr = op.dst_addr + offset
                     value = self.memory.read_u32(MemorySpace.SHARED, shared_addr)
                     self.memory.write_u32(MemorySpace.GLOBAL, global_addr, value)
 
+                # Signal mbarrier completion if mbarrier_addr is set
+                if hasattr(op, 'mbarrier_addr') and op.mbarrier_addr is not None:
+                    self.mbarrier_manager.complete_tx(op.mbarrier_addr)
+
+            tma_op = self.async_queue.create_tma_store(
+                dst_addr=global_base,
+                src_addr=shared_base,
+                size=tile_size,
+                warp_id=self.warp.warp_id,
+                cycles=50
+            )
+            tma_op.callback = tma_store_complete
+            # Link to active mbarrier if set
+            if self.active_mbarrier_addr is not None:
+                tma_op.mbarrier_addr = self.active_mbarrier_addr
+            self.async_queue.submit(tma_op)
+
         elif instr.opcode == Opcode.TMA_WAIT:
             # TMA.WAIT: Wait for TMA operations to complete
-            # In simulation, TMA operations are synchronous, so this is a no-op
-            pass
+            # In real hardware, this waits for the TMA unit to finish
+            # In simulation, we spin until async ops complete
+            # The main simulation loop will handle ticking the async queue
+            pass  # Actual waiting happens in simulation loop
 
     def _exec_wgmma(self, instr: Instruction) -> None:
         """
@@ -1011,61 +1074,81 @@ class WarpExecutor:
 
         mbarrier is used for synchronizing asynchronous operations (TMA, WGMMA)
         in warp-specialized kernels.
+
+        Producer workflow:
+        1. mbarrier.init [addr], count
+        2. mbarrier.expect_tx [addr], count
+        3. Issue async operations (TMA, WGMMA)
+
+        Consumer workflow:
+        1. mbarrier.try_wait [addr] - spins until ready
+        2. Consume data
         """
+        lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+
         if instr.opcode == Opcode.MBARRIER_INIT:
             # MBARRIER_INIT: Initialize mbarrier
             # Format: MBARRIER_INIT [mbarrier_addr], count
             mbarrier_addr_str = instr.operands[0].value
             count = instr.operands[1].value if len(instr.operands) > 1 else 1
 
-            for lane_id in self.warp.get_executing_lane_ids():
-                addr = self._compute_address(mbarrier_addr_str, lane_id)
-                # Initialize mbarrier counter
-                self.memory.write_u32(MemorySpace.SHARED, addr, count)
+            addr = self._compute_address(mbarrier_addr_str, lane_id)
+            self.mbarrier_manager.init_barrier(addr, count, self.warp.warp_id)
+
+            # Also write to shared memory for debugging/visibility
+            self.memory.write_u32(MemorySpace.SHARED, addr, count)
 
         elif instr.opcode == Opcode.MBARRIER_INVAL:
             # MBARRIER_INVAL: Invalidate mbarrier
             mbarrier_addr_str = instr.operands[0].value
 
-            for lane_id in self.warp.get_executing_lane_ids():
-                addr = self._compute_address(mbarrier_addr_str, lane_id)
-                # Invalidate by writing 0
-                self.memory.write_u32(MemorySpace.SHARED, addr, 0)
+            addr = self._compute_address(mbarrier_addr_str, lane_id)
+            self.mbarrier_manager.invalidate(addr)
+            self.memory.write_u32(MemorySpace.SHARED, addr, 0)
 
         elif instr.opcode == Opcode.MBARRIER_ARRIVE:
             # MBARRIER_ARRIVE: Arrive at mbarrier (decrement counter)
             mbarrier_addr_str = instr.operands[0].value
 
-            for lane_id in self.warp.get_executing_lane_ids():
-                addr = self._compute_address(mbarrier_addr_str, lane_id)
-                current = self.memory.read_u32(MemorySpace.SHARED, addr)
-                if current > 0:
-                    self.memory.write_u32(MemorySpace.SHARED, addr, current - 1)
+            addr = self._compute_address(mbarrier_addr_str, lane_id)
+            current = self.memory.read_u32(MemorySpace.SHARED, addr)
+            if current > 0:
+                self.memory.write_u32(MemorySpace.SHARED, addr, current - 1)
 
         elif instr.opcode == Opcode.MBARRIER_TEST_WAIT:
             # MBARRIER_TEST_WAIT: Test and wait for mbarrier
-            # In simulation, this is a no-op since operations are synchronous
-            pass
+            # Spins until mbarrier is ready
+            mbarrier_addr_str = instr.operands[0].value
+            addr = self._compute_address(mbarrier_addr_str, lane_id)
+
+            # Set predicate to true if ready, false if not
+            ready = self.mbarrier_manager.try_wait(addr)
+            # Set predicate register (R0) to result
+            self.warp.write_lane_reg(lane_id, 0, 1 if ready else 0)
 
         elif instr.opcode == Opcode.MBARRIER_EXPECT_TX:
-            # MBARRIER_EXPECT_TX: Expect transaction
+            # MBARRIER_EXPECT_TX: Expect transaction (producer)
+            # Tells mbarrier how many async operations to expect
+            # Also links subsequent TMA operations to this mbarrier
             mbarrier_addr_str = instr.operands[0].value
             count = instr.operands[1].value if len(instr.operands) > 1 else 1
 
-            for lane_id in self.warp.get_executing_lane_ids():
-                addr = self._compute_address(mbarrier_addr_str, lane_id)
-                # Set expected transaction count
-                self.memory.write_u32(MemorySpace.SHARED, addr, count)
+            addr = self._compute_address(mbarrier_addr_str, lane_id)
+            self.mbarrier_manager.expect_tx(addr, count)
+            self.memory.write_u32(MemorySpace.SHARED, addr, count)
+
+            # Track this mbarrier for subsequent TMA operations
+            self.active_mbarrier_addr = addr
 
         elif instr.opcode == Opcode.MBARRIER_COMPLETE_TX:
             # MBARRIER_COMPLETE_TX: Complete transaction
+            # Called manually or by async operation callback
             mbarrier_addr_str = instr.operands[0].value
 
-            for lane_id in self.warp.get_executing_lane_ids():
-                addr = self._compute_address(mbarrier_addr_str, lane_id)
-                current = self.memory.read_u32(MemorySpace.SHARED, addr)
-                if current > 0:
-                    self.memory.write_u32(MemorySpace.SHARED, addr, current - 1)
+            addr = self._compute_address(mbarrier_addr_str, lane_id)
+            is_complete = self.mbarrier_manager.complete_tx(addr)
+            current = self.mbarrier_manager.get_barrier(addr).current_count if self.mbarrier_manager.get_barrier(addr) else 0
+            self.memory.write_u32(MemorySpace.SHARED, addr, current)
 
     def _compute_address(self, addr_str: str, lane_id: int) -> int:
         """

@@ -200,6 +200,166 @@ class Opcode(Enum):
     # Sparse Tensor Core
     MMA_SP = "MMA.SP"    # Sparse matrix multiply
 
+    # ==================== PTX Instruction Set (from isa.md) ====================
+    # Note: These use PTX naming convention (lowercase, with suffixes)
+    # Arithmetic operations
+    ADD = "ADD"          # PTX add
+    SUB = "SUB"          # PTX sub
+    MUL = "MUL"          # PTX mul
+    MAD = "MAD"          # PTX mad
+    DIV = "DIV"          # PTX div
+    REM = "REM"          # PTX remainder
+    ABS = "ABS"          # PTX absolute
+    NEG = "NEG"          # PTX negate
+    MIN = "MIN"          # PTX minimum
+    MAX = "MAX"          # PTX maximum
+    FMA = "FMA"          # PTX fused multiply-add
+    ADDC = "ADDC"        # Add with carry
+    SUBC = "SUBC"        # Subtract with carry
+    MUL24 = "MUL24"      # 24-bit multiply
+    MAD24 = "MAD24"      # 24-bit multiply-add
+    SAD = "SAD"          # Sum of absolute differences
+
+    # Math functions
+    SQRT = "SQRT"        # Square root
+    RSQRT = "RSQRT"      # Reciprocal square root
+    SIN = "SIN"          # Sine
+    COS = "COS"          # Cosine
+    LG2 = "LG2"          # Log base 2
+    EX2 = "EX2"          # Exponent base 2
+    RCP = "RCP"          # Reciprocal
+    COPYSIGN = "COPYSIGN"  # Copy sign
+    TANH = "TANH"        # Hyperbolic tangent
+
+    # Bit manipulation (PTX variants)
+    BFIND = "BFIND"      # Find bit (PTX variant)
+    RBITS = "RBITS"      # Reverse bits (PTX variant)
+
+    # Vector operations
+    VADD = "VADD"        # Vector add
+    VSUB = "VSUB"        # Vector subtract
+    VMIN = "VMIN"        # Vector minimum
+    VMAX = "VMAX"        # Vector maximum
+    VADDDIFF = "VABSDIFF"  # Vector absolute difference
+    VADDDIFF2 = "VABSDIFF2"  # Vector absolute difference 2
+    VADDDIFF4 = "VABSDIFF4"  # Vector absolute difference 4
+    VADD2 = "VADD2"      # Vector add 2
+    VSUB2 = "VSUB2"      # Vector subtract 2
+    VMIN2 = "VMIN2"      # Vector minimum 2
+    VMAX2 = "VMAX2"      # Vector maximum 2
+    VADD4 = "VADD4"      # Vector add 4
+    VSUB4 = "VSUB4"      # Vector subtract 4
+    VMIN4 = "VMIN4"      # Vector minimum 4
+    VMAX4 = "VMAX4"      # Vector maximum 4
+    VSET = "VSET"        # Vector set
+    VSET2 = "VSET2"      # Vector set 2
+    VSET4 = "VSET4"      # Vector set 4
+    VSHL = "VSHL"        # Vector shift left
+    VSHR = "VSHR"        # Vector shift right
+    VARVG2 = "VARVG2"    # Vector average
+    VARVG4 = "VARVG4"    # Vector average
+    VAVRG2 = "VAVRG2"    # Vector average round
+    VAVRG4 = "VAVRG4"    # Vector average round
+    VMAD = "VMAD"        # Vector multiply-add
+
+    # DP4A and DP2A already defined above
+
+    # Memory operations
+    ISSPACEP = "ISSPACEP"  # Is in space
+    ISTYPEP = "ISTYPEP"    # Is of type
+
+    # Barrier operations (PTX variants)
+    BARRIER = "BARRIER"    # Cluster/CTA barrier
+    BARRIER_CLUSTER = "BARRIER.CLUSTER"  # Cluster barrier
+    BARRIER_CTA = "BARRIER.CTA"          # CTA barrier
+
+    # FENCE operations (PTX variants)
+    FENCE_SC = "FENCE.SC"      # Sequential consistency fence
+    FENCE_ACQ_REL = "FENCE.ACQ_REL"  # Acquire-release fence
+
+    # Texture operations (PTX)
+    # TEX already defined above
+    TLD4 = "TLD4"          # Texture gather (PTX)
+    TXQ = "TXQ"            # Texture query (PTX)
+
+    # Surface operations (PTX)
+    # SULD, SUST, SURED already defined above
+    SUQ = "SUQ"            # Surface query (PTX)
+
+    # Multimem operations
+    MULTIMEM = "MULTIMEM"  # Multi-memory operations
+
+    # Tensormap
+    TENSORMAP = "TENSORMAP"  # Tensor map operations
+
+    # Cluster launch control
+    CLUSTERLAUNCHCONTROL = "CLUSTERLAUNCHCONTROL"  # Cluster launch
+
+    # Grid dependency control
+    GRIDDEPCONTROL = "GRIDDEPCONTROL"  # Grid dependency
+
+    # Get CTA rank
+    GETCTARANK = "GETCTARANK"  # Get CTA rank
+
+    # B4x16 operations
+    B4E = "B4E"            # B4x16 extract
+    B4X16_P64 = "B4X16_P64"  # B4x16 with p64
+    B6X16_P32 = "B6X16_P32"  # B6x16 with p32
+
+    # Memory address operations
+    ASEL = "ASEL"          # Address select
+    BSEL = "BSEL"          # Byte select
+
+    # Mx4 operations
+    MXF4 = "MXF4"          # Matrix operation
+    MXF4NVF4 = "MXF4NVF4"  # Matrix operation
+    MXF8F6F4 = "MXF8F6F4"  # Matrix operation
+
+    # Extended operations
+    A2D = "A2D"            # Add 2D
+    A2DMS = "A2DMS"        # Add 2D with multiplier and shuffle
+
+    # Nanosleep
+    NANOSLEEP = "NANOSLEEP"  # Nanosleep
+
+    # Apply priority
+    APPLYPRIORITY = "APPLYPRIORITY"  # Apply priority
+
+    # Enable SMEM spilling
+    ENABLE_SMEM_SPILLING = "ENABLE_SMEM_SPILLING"  # Enable shared memory spilling
+
+    # Member mask
+    MEMBERMASK = "MEMBERMASK"  # Member mask
+
+    # Map operations
+    MAPA = "MAPA"          # Map A
+
+    # Comparison operators (PTX)
+    EQ = "EQ"              # Equal
+    NE = "NE"              # Not equal
+    LT = "LT"              # Less than
+    LE = "LE"              # Less than or equal
+    GT = "GT"              # Greater than
+    GE = "GE"              # Greater than or equal
+    LTU = "LTU"            # Less than unsigned
+    LEU = "LEU"            # Less than or equal unsigned
+    GTU = "GTU"            # Greater than unsigned
+    GEU = "GEU"            # Greater than or equal unsigned
+    LO = "LO"              # Low (for sub)
+    HI = "HI"              # High (for sub)
+    LS = "LS"              # Low or same
+    HS = "HS"              # High or same
+
+    # Equate
+    EQU = "EQU"            # Equate
+
+    # Extended comparison
+    NUM = "NUM"            # Number comparison
+    NAN = "NAN"            # NaN comparison
+
+    # Exit
+    RETD = "RETD"          # Return with delay (deprecated)
+
     # ==================== Warpgroup Matrix (Hopper) ====================
     WGMMA = "WGMMA"              # Warpgroup matrix multiply
     WGMMA_MMA = "WGMMA.MMA"      # Warpgroup matrix multiply-accumulate
@@ -484,9 +644,9 @@ INSTRUCTION_FORMATS = {
     Opcode.TMA: InstructionFormat("TMA", Opcode.TMA, InstructionType.MEMORY,
                                   [OperandType.MEMORY, OperandType.MEMORY]),
     Opcode.TMA_LOAD: InstructionFormat("TMA.LOAD", Opcode.TMA_LOAD, InstructionType.MEMORY,
-                                       [OperandType.MEMORY, OperandType.REGISTER, OperandType.IMMEDIATE]),
+                                       [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
     Opcode.TMA_STORE: InstructionFormat("TMA.STORE", Opcode.TMA_STORE, InstructionType.MEMORY,
-                                        [OperandType.MEMORY, OperandType.REGISTER, OperandType.IMMEDIATE]),
+                                        [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
     Opcode.TMA_WAIT: InstructionFormat("TMA.WAIT", Opcode.TMA_WAIT, InstructionType.WARP_LEVEL,
                                        [OperandType.IMMEDIATE]),
 
@@ -515,6 +675,179 @@ INSTRUCTION_FORMATS = {
                                                    [OperandType.MEMORY]),
     Opcode.MBARRIER_COMPLETE_TX_DOT: InstructionFormat("mbarrier.complete_tx", Opcode.MBARRIER_COMPLETE_TX_DOT, InstructionType.WARP_LEVEL,
                                                        [OperandType.MEMORY]),
+
+    # ==================== PTX Instructions (from isa.md) ====================
+    # Arithmetic
+    Opcode.ADD: InstructionFormat("ADD", Opcode.ADD, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.SUB: InstructionFormat("SUB", Opcode.SUB, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.MUL: InstructionFormat("MUL", Opcode.MUL, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.MAD: InstructionFormat("MAD", Opcode.MAD, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.DIV: InstructionFormat("DIV", Opcode.DIV, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.REM: InstructionFormat("REM", Opcode.REM, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.ABS: InstructionFormat("ABS", Opcode.ABS, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.NEG: InstructionFormat("NEG", Opcode.NEG, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.MIN: InstructionFormat("MIN", Opcode.MIN, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.MAX: InstructionFormat("MAX", Opcode.MAX, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.FMA: InstructionFormat("FMA", Opcode.FMA, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.MUL24: InstructionFormat("MUL24", Opcode.MUL24, InstructionType.ARITHMETIC,
+                                    [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.MAD24: InstructionFormat("MAD24", Opcode.MAD24, InstructionType.ARITHMETIC,
+                                    [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.SAD: InstructionFormat("SAD", Opcode.SAD, InstructionType.ARITHMETIC,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+
+    # Math functions
+    Opcode.SQRT: InstructionFormat("SQRT", Opcode.SQRT, InstructionType.FLOATING,
+                                   [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.RSQRT: InstructionFormat("RSQRT", Opcode.RSQRT, InstructionType.FLOATING,
+                                    [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.SIN: InstructionFormat("SIN", Opcode.SIN, InstructionType.FLOATING,
+                                  [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.COS: InstructionFormat("COS", Opcode.COS, InstructionType.FLOATING,
+                                  [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.LG2: InstructionFormat("LG2", Opcode.LG2, InstructionType.FLOATING,
+                                  [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.EX2: InstructionFormat("EX2", Opcode.EX2, InstructionType.FLOATING,
+                                  [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.RCP: InstructionFormat("RCP", Opcode.RCP, InstructionType.FLOATING,
+                                  [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.COPYSIGN: InstructionFormat("COPYSIGN", Opcode.COPYSIGN, InstructionType.FLOATING,
+                                       [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.TANH: InstructionFormat("TANH", Opcode.TANH, InstructionType.FLOATING,
+                                   [OperandType.REGISTER, OperandType.REGISTER]),
+
+    # Bit manipulation (PTX)
+    Opcode.BFIND: InstructionFormat("BFIND", Opcode.BFIND, InstructionType.LOGICAL,
+                                    [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.BMSK: InstructionFormat("BMSK", Opcode.BMSK, InstructionType.LOGICAL,
+                                   [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.RBITS: InstructionFormat("RBITS", Opcode.RBITS, InstructionType.LOGICAL,
+                                    [OperandType.REGISTER, OperandType.REGISTER]),
+
+    # Vector operations
+    Opcode.VADD: InstructionFormat("VADD", Opcode.VADD, InstructionType.ARITHMETIC,
+                                   [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.VSUB: InstructionFormat("VSUB", Opcode.VSUB, InstructionType.ARITHMETIC,
+                                   [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.VMIN: InstructionFormat("VMIN", Opcode.VMIN, InstructionType.ARITHMETIC,
+                                   [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.VMAX: InstructionFormat("VMAX", Opcode.VMAX, InstructionType.ARITHMETIC,
+                                   [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.DP2A: InstructionFormat("DP2A", Opcode.DP2A, InstructionType.ARITHMETIC,
+                                   [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+
+    # Memory operations
+    Opcode.ISSPACEP: InstructionFormat("ISSPACEP", Opcode.ISSPACEP, InstructionType.LOGICAL,
+                                       [OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.ISTYPEP: InstructionFormat("ISTYPEP", Opcode.ISTYPEP, InstructionType.LOGICAL,
+                                      [OperandType.REGISTER, OperandType.REGISTER]),
+
+    # Barrier operations (PTX)
+    Opcode.BARRIER: InstructionFormat("BARRIER", Opcode.BARRIER, InstructionType.WARP_LEVEL,
+                                      [OperandType.IMMEDIATE]),
+    Opcode.BARRIER_CLUSTER: InstructionFormat("BARRIER.CLUSTER", Opcode.BARRIER_CLUSTER, InstructionType.WARP_LEVEL,
+                                              [OperandType.IMMEDIATE]),
+    Opcode.BARRIER_CTA: InstructionFormat("BARRIER.CTA", Opcode.BARRIER_CTA, InstructionType.WARP_LEVEL,
+                                         [OperandType.IMMEDIATE]),
+
+    # FENCE operations (PTX)
+    Opcode.FENCE_SC: InstructionFormat("FENCE.SC", Opcode.FENCE_SC, InstructionType.WARP_LEVEL,
+                                       [OperandType.IMMEDIATE]),
+    Opcode.FENCE_ACQ_REL: InstructionFormat("FENCE.ACQ_REL", Opcode.FENCE_ACQ_REL, InstructionType.WARP_LEVEL,
+                                            [OperandType.IMMEDIATE]),
+
+    # Texture operations (PTX)
+    Opcode.TEX: InstructionFormat("TEX", Opcode.TEX, InstructionType.MEMORY,
+                                  [OperandType.REGISTER, OperandType.MEMORY]),
+    Opcode.TLD4: InstructionFormat("TLD4", Opcode.TLD4, InstructionType.MEMORY,
+                                   [OperandType.REGISTER, OperandType.MEMORY]),
+    Opcode.TXQ: InstructionFormat("TXQ", Opcode.TXQ, InstructionType.MEMORY,
+                                  [OperandType.REGISTER, OperandType.IMMEDIATE]),
+
+    # Surface operations (PTX)
+    Opcode.SULD: InstructionFormat("SULD", Opcode.SULD, InstructionType.MEMORY,
+                                   [OperandType.REGISTER, OperandType.MEMORY]),
+    Opcode.SUST: InstructionFormat("SUST", Opcode.SUST, InstructionType.MEMORY,
+                                   [OperandType.MEMORY, OperandType.REGISTER]),
+    Opcode.SURED: InstructionFormat("SURED", Opcode.SURED, InstructionType.MEMORY,
+                                    [OperandType.MEMORY, OperandType.REGISTER]),
+    Opcode.SUQ: InstructionFormat("SUQ", Opcode.SUQ, InstructionType.MEMORY,
+                                  [OperandType.REGISTER, OperandType.MEMORY]),
+
+    # Multimem
+    Opcode.MULTIMEM: InstructionFormat("MULTIMEM", Opcode.MULTIMEM, InstructionType.MEMORY,
+                                       [OperandType.REGISTER, OperandType.MEMORY]),
+
+    # Tensormap
+    Opcode.TENSORMAP: InstructionFormat("TENSORMAP", Opcode.TENSORMAP, InstructionType.MEMORY,
+                                        [OperandType.REGISTER, OperandType.MEMORY]),
+
+    # Cluster launch
+    Opcode.CLUSTERLAUNCHCONTROL: InstructionFormat("CLUSTERLAUNCHCONTROL", Opcode.CLUSTERLAUNCHCONTROL, InstructionType.CONTROL_FLOW,
+                                                   [OperandType.IMMEDIATE]),
+
+    # Grid dependency
+    Opcode.GRIDDEPCONTROL: InstructionFormat("GRIDDEPCONTROL", Opcode.GRIDDEPCONTROL, InstructionType.CONTROL_FLOW,
+                                             [OperandType.IMMEDIATE]),
+
+    # Get CTA rank
+    Opcode.GETCTARANK: InstructionFormat("GETCTARANK", Opcode.GETCTARANK, InstructionType.WARP_LEVEL,
+                                         [OperandType.REGISTER]),
+
+    # Nanosleep
+    Opcode.NANOSLEEP: InstructionFormat("NANOSLEEP", Opcode.NANOSLEEP, InstructionType.SPECIAL,
+                                        [OperandType.IMMEDIATE]),
+
+    # Member mask
+    Opcode.MEMBERMASK: InstructionFormat("MEMBERMASK", Opcode.MEMBERMASK, InstructionType.WARP_LEVEL,
+                                        [OperandType.REGISTER]),
+
+    # Map operations
+    Opcode.MAPA: InstructionFormat("MAPA", Opcode.MAPA, InstructionType.ARITHMETIC,
+                                   [OperandType.REGISTER, OperandType.REGISTER]),
+
+    # Comparison operators (PTX)
+    Opcode.EQ: InstructionFormat("EQ", Opcode.EQ, InstructionType.LOGICAL,
+                                 [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.NE: InstructionFormat("NE", Opcode.NE, InstructionType.LOGICAL,
+                                 [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.LT: InstructionFormat("LT", Opcode.LT, InstructionType.LOGICAL,
+                                 [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.LE: InstructionFormat("LE", Opcode.LE, InstructionType.LOGICAL,
+                                 [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.GT: InstructionFormat("GT", Opcode.GT, InstructionType.LOGICAL,
+                                 [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.GE: InstructionFormat("GE", Opcode.GE, InstructionType.LOGICAL,
+                                 [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.LTU: InstructionFormat("LTU", Opcode.LTU, InstructionType.LOGICAL,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.LEU: InstructionFormat("LEU", Opcode.LEU, InstructionType.LOGICAL,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.GTU: InstructionFormat("GTU", Opcode.GTU, InstructionType.LOGICAL,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.GEU: InstructionFormat("GEU", Opcode.GEU, InstructionType.LOGICAL,
+                                  [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.LO: InstructionFormat("LO", Opcode.LO, InstructionType.LOGICAL,
+                                 [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.HI: InstructionFormat("HI", Opcode.HI, InstructionType.LOGICAL,
+                                 [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.LS: InstructionFormat("LS", Opcode.LS, InstructionType.LOGICAL,
+                                 [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.HS: InstructionFormat("HS", Opcode.HS, InstructionType.LOGICAL,
+                                 [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER]),
+    Opcode.EQU: InstructionFormat("EQU", Opcode.EQU, InstructionType.LOGICAL,
+                                  [OperandType.IMMEDIATE]),
 }
 
 

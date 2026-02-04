@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from .core.warp import Warp
 from .core.memory import Memory, MemorySpace
 from .core.thread import ThreadState
+from .core.async_ops import AsyncQueue
+from .core.mbarrier import MbarrierManager
 from .executor.warp import WarpExecutor
 from .executor.pipeline import ExecutionPipeline, PipelineConfig
 from .isa.decoder import parse_program
@@ -65,6 +67,12 @@ class HopperSimulator:
             shared_size=self.config.shared_mem_size
         )
 
+        # Create async operation queue (shared across all warps for TMA, WGMMA)
+        self.async_queue = AsyncQueue(num_units=4)
+
+        # Create mbarrier manager for synchronizing async operations
+        self.mbarrier_manager = MbarrierManager()
+
         # Create warps
         self.warps: List[Warp] = []
         self.executors: List[WarpExecutor] = []
@@ -73,7 +81,7 @@ class HopperSimulator:
             for warp_id in range(self.config.warps_per_sm):
                 global_warp_id = sm_id * self.config.warps_per_sm + warp_id
                 warp = Warp(warp_id=global_warp_id, start_pc=0)
-                executor = WarpExecutor(warp, self.memory)
+                executor = WarpExecutor(warp, self.memory, self.async_queue, self.mbarrier_manager)
 
                 self.warps.append(warp)
                 self.executors.append(executor)
@@ -148,7 +156,8 @@ class HopperSimulator:
             stats = self.pipeline.execute_warps(
                 self.executors,
                 self.programs,
-                max_cycles=max_cycles
+                max_cycles=max_cycles,
+                async_queue=self.async_queue
             )
 
             return SimulationResult(
@@ -220,7 +229,13 @@ class HopperSimulator:
 
     def reset(self) -> None:
         """Reset the simulator to initial state."""
-        # Re-create warps and executors
+        # Reset async queue and mbarrier manager FIRST (before recreating executors)
+        from .core.async_ops import AsyncQueue
+        from .core.mbarrier import MbarrierManager
+        self.async_queue = AsyncQueue(num_units=4)
+        self.mbarrier_manager = MbarrierManager()
+
+        # Re-create warps and executors with new async queue
         self.warps.clear()
         self.executors.clear()
 
@@ -228,7 +243,7 @@ class HopperSimulator:
             for warp_id in range(self.config.warps_per_sm):
                 global_warp_id = sm_id * self.config.warps_per_sm + warp_id
                 warp = Warp(warp_id=global_warp_id, start_pc=0)
-                executor = WarpExecutor(warp, self.memory)
+                executor = WarpExecutor(warp, self.memory, self.async_queue, self.mbarrier_manager)
 
                 self.warps.append(warp)
                 self.executors.append(executor)

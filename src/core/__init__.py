@@ -3,6 +3,8 @@ from .register import RegisterFile
 from .thread import Thread, ThreadState
 from .warp import Warp
 from .memory import Memory, MemorySpace
+from .async_ops import AsyncQueue, AsyncOperation, AsyncOpType, AsyncOpState
+from .mbarrier import Mbarrier, MbarrierManager, MbarrierState
 
 __all__ = [
     'RegisterFile',
@@ -11,4 +13,11 @@ __all__ = [
     'Warp',
     'Memory',
     'MemorySpace',
+    'AsyncQueue',
+    'AsyncOperation',
+    'AsyncOpType',
+    'AsyncOpState',
+    'Mbarrier',
+    'MbarrierManager',
+    'MbarrierState',
 ]

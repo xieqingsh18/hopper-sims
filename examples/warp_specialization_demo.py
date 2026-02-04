@@ -10,9 +10,6 @@ Demonstrates Hopper's warp specialization features:
 This shows how these features enable efficient GEMM operations.
 """
 
-import sys
-sys.path.insert(0, '/Users/xieq/claude/hopper')
-
 from src.simulator import HopperSimulator, SimulatorConfig
 from src.core.memory import MemorySpace
 

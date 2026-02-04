@@ -57,7 +57,8 @@ class ExecutionPipeline:
     def execute_warps(self,
                       warps: List,
                       instructions: Dict[int, List],
-                      max_cycles: int = 10000) -> ExecutionStats:
+                      max_cycles: int = 10000,
+                      async_queue=None) -> ExecutionStats:
         """
         Execute instructions for multiple warps.
 
@@ -65,6 +66,7 @@ class ExecutionPipeline:
             warps: List of warp executors
             instructions: Map from warp ID to instruction list
             max_cycles: Maximum cycles to execute
+            async_queue: Optional async operation queue (for TMA, WGMMA)
 
         Returns:
             Execution statistics
@@ -75,6 +77,10 @@ class ExecutionPipeline:
 
         while cycle < max_cycles:
             active_warps = False
+
+            # Tick async queue at the start of each cycle
+            if async_queue:
+                async_queue.tick()
 
             # Execute one instruction from each warp (round-robin)
             for warp_idx, warp_executor in enumerate(warps):
@@ -110,6 +116,10 @@ class ExecutionPipeline:
 
             # Check if all warps are done
             if not active_warps:
+                # Wait for async operations to complete before finishing
+                if async_queue and async_queue.get_pending_count() > 0:
+                    # Continue ticking async ops even though warps are done
+                    continue
                 break
 
         self.stats.total_cycles = cycle

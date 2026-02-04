@@ -6,9 +6,6 @@ Demonstrates warp-level operations including barriers, voting, shuffling,
 elections, and reductions - key features of SIMT programming on GPUs.
 """
 
-import sys
-sys.path.insert(0, '/Users/xieq/claude/hopper')
-
 from src.simulator import HopperSimulator, SimulatorConfig
 
 

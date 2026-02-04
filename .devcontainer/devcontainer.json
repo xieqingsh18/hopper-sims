@@ -1,9 +1,6 @@
 {
   "name": "Hopper GPU Simulator Dev Container",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": ".."
-  },
+  "image": "python:3.11-slim",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "installZsh": true,
@@ -41,5 +38,5 @@
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
   "mounts": [],
   "forwardPorts": [],
-  "postCreateCommand": "pip install -e ."
+  "postCreateCommand": "apt-get update && apt-get install -y git vim build-essential"
 }

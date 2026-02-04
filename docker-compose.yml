@@ -3,11 +3,13 @@ version: '3.8'
 services:
   hopper-sim:
     build: .
+    user: dev
     volumes:
       - .:/workspace
     working_dir: /workspace
     environment:
       - PYTHONPATH=/workspace
+      - HOME=/home/dev
     stdin_open: true
     tty: true
     command: /bin/bash

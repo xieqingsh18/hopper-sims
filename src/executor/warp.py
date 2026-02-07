@@ -92,7 +92,7 @@ class WarpExecutor:
 
         # If no lanes should execute, skip but still advance PC
         if not should_execute or not self.warp.any_executing():
-            self.warp.advance_pc(1)
+            self.warp.advance_pc(4)
             self.instructions_executed += 1
             return True
 
@@ -225,12 +225,12 @@ class WarpExecutor:
         except ExecutionException as e:
             print(f"Execution error at PC={instruction.pc:#x}: {e}")
             # Continue execution despite error
-            self.warp.advance_pc(1)
+            self.warp.advance_pc(4)
             return True
 
         # Advance PC (unless instruction modified it)
         if opcode not in {Opcode.BRA, Opcode.BRX, Opcode.CALL, Opcode.CAL, Opcode.RET, Opcode.EXIT}:
-            self.warp.advance_pc(1)
+            self.warp.advance_pc(4)
 
         self.instructions_executed += 1
         return True
@@ -450,36 +450,60 @@ class WarpExecutor:
     def _exec_iadd(self, instr: Instruction) -> None:
         """Execute IADD: Rd = Ra + Rb"""
         dst = instr.operands[0].value
-        src1 = instr.operands[1].value
-        src2 = instr.operands[2].value
 
         for lane_id in self.warp.get_executing_lane_ids():
-            val1 = self.warp.read_lane_reg(lane_id, src1)
-            val2 = self.warp.read_lane_reg(lane_id, src2)
+            # Get src1 value (register or immediate)
+            if instr.operands[1].type == OperandType.IMMEDIATE:
+                val1 = instr.operands[1].value
+            else:
+                val1 = self.warp.read_lane_reg(lane_id, instr.operands[1].value)
+
+            # Get src2 value (register or immediate)
+            if instr.operands[2].type == OperandType.IMMEDIATE:
+                val2 = instr.operands[2].value
+            else:
+                val2 = self.warp.read_lane_reg(lane_id, instr.operands[2].value)
+
             result = (val1 + val2) & 0xFFFFFFFF
             self.warp.write_lane_reg(lane_id, dst, result)
 
     def _exec_isub(self, instr: Instruction) -> None:
         """Execute ISUB: Rd = Ra - Rb"""
         dst = instr.operands[0].value
-        src1 = instr.operands[1].value
-        src2 = instr.operands[2].value
 
         for lane_id in self.warp.get_executing_lane_ids():
-            val1 = self.warp.read_lane_reg(lane_id, src1)
-            val2 = self.warp.read_lane_reg(lane_id, src2)
+            # Get src1 value (register or immediate)
+            if instr.operands[1].type == OperandType.IMMEDIATE:
+                val1 = instr.operands[1].value
+            else:
+                val1 = self.warp.read_lane_reg(lane_id, instr.operands[1].value)
+
+            # Get src2 value (register or immediate)
+            if instr.operands[2].type == OperandType.IMMEDIATE:
+                val2 = instr.operands[2].value
+            else:
+                val2 = self.warp.read_lane_reg(lane_id, instr.operands[2].value)
+
             result = (val1 - val2) & 0xFFFFFFFF
             self.warp.write_lane_reg(lane_id, dst, result)
 
     def _exec_imul(self, instr: Instruction) -> None:
         """Execute IMUL: Rd = Ra * Rb"""
         dst = instr.operands[0].value
-        src1 = instr.operands[1].value
-        src2 = instr.operands[2].value
 
         for lane_id in self.warp.get_executing_lane_ids():
-            val1 = self.warp.read_lane_reg(lane_id, src1)
-            val2 = self.warp.read_lane_reg(lane_id, src2)
+            # Get src1 value (register or immediate)
+            if instr.operands[1].type == OperandType.IMMEDIATE:
+                val1 = instr.operands[1].value
+            else:
+                val1 = self.warp.read_lane_reg(lane_id, instr.operands[1].value)
+
+            # Get src2 value (register or immediate)
+            if instr.operands[2].type == OperandType.IMMEDIATE:
+                val2 = instr.operands[2].value
+            else:
+                val2 = self.warp.read_lane_reg(lane_id, instr.operands[2].value)
+
             # Sign-extend and multiply
             prod = c_int32(val1).value * c_int32(val2).value
             result = prod & 0xFFFFFFFF
@@ -488,13 +512,21 @@ class WarpExecutor:
     def _exec_iminmax(self, instr: Instruction) -> None:
         """Execute IMIN/IMAX: Rd = min(Ra, Rb) or max(Ra, Rb)"""
         dst = instr.operands[0].value
-        src1 = instr.operands[1].value
-        src2 = instr.operands[2].value
         is_max = (instr.opcode == Opcode.IMAX)
 
         for lane_id in self.warp.get_executing_lane_ids():
-            val1 = c_int32(self.warp.read_lane_reg(lane_id, src1)).value
-            val2 = c_int32(self.warp.read_lane_reg(lane_id, src2)).value
+            # Get src1 value (register or immediate)
+            if instr.operands[1].type == OperandType.IMMEDIATE:
+                val1 = instr.operands[1].value
+            else:
+                val1 = c_int32(self.warp.read_lane_reg(lane_id, instr.operands[1].value)).value
+
+            # Get src2 value (register or immediate)
+            if instr.operands[2].type == OperandType.IMMEDIATE:
+                val2 = instr.operands[2].value
+            else:
+                val2 = c_int32(self.warp.read_lane_reg(lane_id, instr.operands[2].value)).value
+
             result = max(val1, val2) if is_max else min(val1, val2)
             self.warp.write_lane_reg(lane_id, dst, result & 0xFFFFFFFF)
 
@@ -971,7 +1003,7 @@ class WarpExecutor:
                 src_addr=global_base,
                 size=tile_size,
                 warp_id=self.warp.warp_id,
-                cycles=50  # Simulation: 50 cycles to complete
+                cycles=1  # Simulation: 1 cycle to complete
             )
             tma_op.callback = tma_load_complete
             # Link to active mbarrier if set
@@ -1008,7 +1040,7 @@ class WarpExecutor:
                 src_addr=shared_base,
                 size=tile_size,
                 warp_id=self.warp.warp_id,
-                cycles=50
+                cycles=1  # Simulation: 1 cycle to complete
             )
             tma_op.callback = tma_store_complete
             # Link to active mbarrier if set
@@ -1018,10 +1050,11 @@ class WarpExecutor:
 
         elif instr.opcode == Opcode.TMA_WAIT:
             # TMA.WAIT: Wait for TMA operations to complete
-            # In real hardware, this waits for the TMA unit to finish
-            # In simulation, we spin until async ops complete
-            # The main simulation loop will handle ticking the async queue
-            pass  # Actual waiting happens in simulation loop
+            # Wait for all pending async operations for this warp to complete
+            # The pipeline will tick the async queue each cycle until done
+            # For now, we don't block here - the async operations complete
+            # in the background based on their cycle count
+            pass
 
     def _exec_wgmma(self, instr: Instruction) -> None:
         """

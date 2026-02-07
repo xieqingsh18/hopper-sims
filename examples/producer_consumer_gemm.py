@@ -20,9 +20,6 @@ Memory Layout:
 - mbarrier: Synchronization primitives
 """
 
-import sys
-sys.path.insert(0, '/Users/xieq/claude/hopper')
-
 from src.simulator import HopperSimulator, SimulatorConfig
 from src.isa.decoder import InstructionDecoder, parse_program
 from src.core.memory import MemorySpace
@@ -243,12 +240,11 @@ def run_producer_consumer_gemm():
     producer_instructions = parse_program(producer_code)
 
     # Warp 0 and 1 are producers
-    sim.load_warp_program(0, producer_instructions)
-    sim.load_warp_program(1, producer_instructions)
+    sim.load_program(producer_code, warp_id=0)
+    sim.load_program(producer_code, warp_id=1)
 
     # Run producer warps
-    sim.run_warp(0, max_cycles=1000)
-    sim.run_warp(1, max_cycles=1000)
+    sim.run(max_cycles=1000)
 
     print_header("Consumer Warps (Warps 2-3)")
     print("\nPerforming matrix multiplication using WGMMA...")
@@ -260,28 +256,29 @@ def run_producer_consumer_gemm():
 
     # Execute consumer warps
     print("\n--- Executing Consumer Warps ---")
-    consumer_instructions = parse_program(consumer_code)
 
     # Warp 2 and 3 are consumers
-    sim.load_warp_program(2, consumer_instructions)
-    sim.load_warp_program(3, consumer_instructions)
+    sim.load_program(consumer_code, warp_id=2)
+    sim.load_program(consumer_code, warp_id=3)
 
-    # Run consumer warps
-    sim.run_warp(2, max_cycles=1000)
-    sim.run_warp(3, max_cycles=1000)
+    # Run all warps together (producers and consumers run concurrently)
+    print("\n--- Running All Warps (Producers and Consumers) ---")
+    result = sim.run(max_cycles=1000)
 
     print_header("Execution Results")
 
     # Display warp statistics
     print("\nProducer Warp Statistics:")
     for warp_id in [0, 1]:
-        stats = sim.get_warp_stats(warp_id)
-        print(f"  Warp {warp_id}: {stats['instructions_executed']} instructions executed")
+        if warp_id in result.warp_stats:
+            stats = result.warp_stats[warp_id]
+            print(f"  Warp {warp_id}: {stats.get('instructions_executed', 0)} instructions executed")
 
     print("\nConsumer Warp Statistics:")
     for warp_id in [2, 3]:
-        stats = sim.get_warp_stats(warp_id)
-        print(f"  Warp {warp_id}: {stats['instructions_executed']} instructions executed")
+        if warp_id in result.warp_stats:
+            stats = result.warp_stats[warp_id]
+            print(f"  Warp {warp_id}: {stats.get('instructions_executed', 0)} instructions executed")
 
     # Verify shared memory contents
     print_header("Shared Memory Contents")

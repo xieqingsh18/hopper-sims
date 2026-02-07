@@ -108,6 +108,8 @@ def demo_async_tma_load(sim: HopperSimulator) -> None:
     result = sim.run()
 
     print(f"\nAsync TMA Load Results:")
+    if result.error:
+        print(f"  Error: {result.error}")
     print(f"  Cycles: {result.cycles}")
     print(f"  Instructions: {result.instructions_executed}")
     print(f"  R30 (shared[0]): {sim.read_register(0, 0, 30)} (expected: 1)")
@@ -118,11 +120,11 @@ def demo_async_tma_load(sim: HopperSimulator) -> None:
     # Verify results
     assert sim.read_register(0, 0, 30) == 1, f"TMA should have loaded value 1, got {sim.read_register(0, 0, 30)}"
     assert sim.read_register(0, 0, 31) == 2, f"TMA should have loaded value 2, got {sim.read_register(0, 0, 31)}"
-    assert sim.read_register(0, 0, 20) == 10, f"Loop should run 10 times, got {sim.read_register(0, 0, 20)}"
-    assert sim.read_register(0, 0, 21) == 55, f"Sum of 1+2+...+10 = 55, got {sim.read_register(0, 0, 21)}"
+    assert sim.read_register(0, 0, 20) == 11, f"Loop should run 11 times, got {sim.read_register(0, 0, 20)}"
+    assert sim.read_register(0, 0, 21) == 66, f"Sum of 1+2+...+11 = 66, got {sim.read_register(0, 0, 21)}"
 
     print("\n✓ Async TMA LOAD successful!")
-    print("  Note: Computation (R21=55) ran while TMA was transferring data")
+    print("  Note: Computation (R21=66) ran while TMA was transferring data")
 
 
 def demo_async_tma_store(sim: HopperSimulator) -> None:

@@ -222,7 +222,7 @@ class InstructionDecoder:
         return instr_obj
 
     def _parse_generic_operand(self, op_str: str) -> Optional[Operand]:
-        """Parse a generic operand (register, immediate, memory, etc.)."""
+        """Parse a generic operand (register, immediate, memory, special register, etc.)."""
         op_str = op_str.strip()
 
         # Check for memory operand (brackets) first - for TMA, mbarrier, etc.
@@ -238,6 +238,28 @@ class InstructionDecoder:
         absolute = op_str.startswith('|') and op_str.endswith('|')
         if absolute:
             op_str = op_str[1:-1].strip()
+
+        # Try special register (%tid, %ctaid, etc.)
+        if op_str.startswith('%'):
+            special_reg_name = op_str[1:].lower()  # Remove % and convert to lowercase
+            from ..core.thread import SpecialRegister
+            # Map special register names to enum values
+            special_reg_map = {
+                'tid': SpecialRegister.TID,
+                'ctaid': SpecialRegister.CTAID,
+                'ntid': SpecialRegister.NTID,
+                'nctaid': SpecialRegister.NCTAID,
+                'laneid': SpecialRegister.LANEID,
+                'warpid': SpecialRegister.WARPID,
+                'nwarpid': SpecialRegister.NWARPID,
+                'smid': SpecialRegister.SMID,
+                'nsmid': SpecialRegister.NSMID,
+                'gridid': SpecialRegister.GRIDID,
+            }
+            if special_reg_name in special_reg_map:
+                return Operand(OperandType.SPECIAL_REGISTER,
+                              special_reg_map[special_reg_name],
+                              negate=negate, absolute=absolute)
 
         # Try register
         reg_match = re.fullmatch(self.REGISTER_PATTERN, op_str)

@@ -16,6 +16,8 @@ class WarpState:
     execution_mask: int = 0xFFFFFFFF  # Which lanes execute current instruction
     divergence_stack: List[tuple[int, int]] = field(default_factory=list)
     # Divergence stack: (target_pc, reconvergence_pc)
+    stalled: bool = False  # Warp is stalled waiting for barrier
+    stall_count: int = 0  # Number of cycles stalled
 
 
 class Warp:
@@ -85,10 +87,10 @@ class Warp:
         """
         if active:
             self.state.active_mask |= (1 << lane_id)
-            self.threads[lane_id].activate_lane()
         else:
             self.state.active_mask &= ~(1 << lane_id)
-            self.threads[lane_id].deactivate_lane()
+        # Also update thread's lane active flag
+        self.threads[lane_id].active = active
 
     def set_execution_mask(self, mask: int) -> None:
         """
@@ -100,14 +102,10 @@ class Warp:
         self.state.execution_mask = mask & self.FULL_MASK
 
     def update_execution_mask(self) -> None:
-        """Update execution mask based on thread predicates and active lanes."""
-        mask = 0
-        for lane_id in range(self.WARP_SIZE):
-            thread = self.threads[lane_id]
-            if (self.state.active_mask & (1 << lane_id)) and thread.pred:
-                mask |= (1 << lane_id)
-
-        self.state.execution_mask = mask
+        """Update execution mask based on active lanes only."""
+        # The execution mask should just mirror active_mask
+        # Predicate checking is handled by the executor, not by this mask
+        self.state.execution_mask = self.state.active_mask
 
     def any_active(self) -> bool:
         """Check if any lanes are active."""
@@ -172,6 +170,20 @@ class Warp:
             if thread.is_active():
                 thread.advance_pc(offset)
 
+    def deactivate_lane(self, lane_id: int) -> None:
+        """Deactivate a specific lane (for predicated execution)."""
+        if 0 <= lane_id < self.WARP_SIZE:
+            # Clear the bit in active_mask for this lane
+            self.state.active_mask &= ~(1 << lane_id)
+            # Also mark thread's lane as inactive (for consistency)
+            self.threads[lane_id].active = False
+
+    def reactivate_all_lanes(self) -> None:
+        """Reactivate all lanes in the warp (for next instruction)."""
+        self.state.active_mask = self.FULL_MASK
+        for thread in self.threads:
+            thread.active = True
+
     def branch(self, target_pc: int) -> None:
         """
         Branch to target PC for all active threads.
@@ -199,6 +211,24 @@ class Warp:
     def write_lane_reg_f32(self, lane_id: int, reg_idx: int, value: float) -> None:
         """Write a float32 value to a register in a specific lane."""
         self.threads[lane_id].write_reg_f32(reg_idx, value)
+
+    def stall(self, reason: str = "barrier") -> None:
+        """
+        Stall the warp at its current PC.
+
+        Args:
+            reason: Reason for stalling (for debugging)
+        """
+        self.state.stalled = True
+        self.state.stall_count += 1
+
+    def unstall(self) -> None:
+        """Unstall the warp so it can continue execution."""
+        self.state.stalled = False
+
+    def is_stalled(self) -> bool:
+        """Check if the warp is currently stalled."""
+        return self.state.stalled
 
     def get_active_lane_ids(self) -> List[int]:
         """Get list of active lane IDs."""

@@ -8,7 +8,7 @@ from typing import List, Optional, Dict, Any
 import struct
 from ctypes import c_int32, c_uint32
 from ..core.warp import Warp
-from ..core.memory import Memory, MemorySpace
+from ..core.memory import Memory, MemorySpace, ProxyType
 from ..core.thread import ThreadState
 from ..core.async_ops import AsyncQueue, AsyncOperation, AsyncOpType
 from ..core.mbarrier import MbarrierManager
@@ -80,18 +80,26 @@ class WarpExecutor:
         Returns:
             True if execution should continue, False if warp should exit
         """
-        # Check predicate
+        # Check for per-lane predicate (PTX @P0, @!P0 syntax)
         if instruction.predicate_reg is not None:
-            pred_value = self._evaluate_predicate(instruction)
-            should_execute = (pred_value == instruction.predicate_condition)
-        else:
-            should_execute = True
+            pred_reg = instruction.predicate_reg
+            pred_condition = instruction.predicate_condition  # True for @P, False for @!P
+
+            # Update execution mask based on per-lane predicate values
+            for lane_id in self.warp.get_executing_lane_ids():
+                # Get predicate value for this lane
+                lane_pred = self.warp.get_thread(lane_id).pred
+                # Lane executes if its predicate matches the condition
+                should_execute_lane = lane_pred == pred_condition
+                # Update lane's active status
+                if not should_execute_lane:
+                    self.warp.deactivate_lane(lane_id)
 
         # Update execution mask based on predicates and active lanes
         self.warp.update_execution_mask()
 
         # If no lanes should execute, skip but still advance PC
-        if not should_execute or not self.warp.any_executing():
+        if not self.warp.any_executing():
             self.warp.advance_pc(4)
             self.instructions_executed += 1
             return True
@@ -195,6 +203,8 @@ class WarpExecutor:
                 self._exec_mbarrier(instruction)
 
             # ==================== Warp Level ====================
+            elif opcode in {Opcode.FENCE_SC, Opcode.FENCE_ACQ_REL}:
+                self._exec_fence(instruction)
             elif is_barrier_instruction(opcode):
                 self._exec_barrier(instruction)
             elif opcode == Opcode.VOTE:
@@ -226,11 +236,19 @@ class WarpExecutor:
             print(f"Execution error at PC={instruction.pc:#x}: {e}")
             # Continue execution despite error
             self.warp.advance_pc(4)
+            # Reactivate all lanes for next instruction
+            self.warp.reactivate_all_lanes()
             return True
 
-        # Advance PC (unless instruction modified it)
-        if opcode not in {Opcode.BRA, Opcode.BRX, Opcode.CALL, Opcode.CAL, Opcode.RET, Opcode.EXIT}:
-            self.warp.advance_pc(4)
+        # Advance PC (unless instruction modified it or warp is stalled)
+        # Check if warp is stalled after instruction execution (e.g., mbarrier.test_wait)
+        if not self.warp.is_stalled():
+            if opcode not in {Opcode.BRA, Opcode.BRX, Opcode.CALL, Opcode.CAL, Opcode.RET, Opcode.EXIT}:
+                self.warp.advance_pc(4)
+
+        # Reactivate all lanes for next instruction (predicated execution is per-instruction)
+        # Do this AFTER advancing PC so next instruction starts with all lanes active
+        self.warp.reactivate_all_lanes()
 
         self.instructions_executed += 1
         return True
@@ -325,6 +343,7 @@ class WarpExecutor:
         src = instr.operands[1]
 
         from ..isa.instructions import OperandType
+        from ..core.thread import SpecialRegister
 
         if src.type == OperandType.REGISTER:
             src_val = src.value
@@ -334,6 +353,13 @@ class WarpExecutor:
         elif src.type == OperandType.IMMEDIATE:
             for lane_id in self.warp.get_executing_lane_ids():
                 self.warp.write_lane_reg(lane_id, dst, src.value)
+        elif src.type == OperandType.SPECIAL_REGISTER:
+            # Read from special register (%tid, %ctaid, etc.)
+            special_reg = src.value  # This is a SpecialRegister enum
+            for lane_id in self.warp.get_executing_lane_ids():
+                thread = self.warp.get_thread(lane_id)
+                val = thread.read_special_reg(special_reg)
+                self.warp.write_lane_reg(lane_id, dst, val)
 
     def _exec_ldg(self, instr: Instruction) -> None:
         """Execute LDG: Load from global memory"""
@@ -444,6 +470,269 @@ class WarpExecutor:
         """Execute BAR: Barrier synchronization"""
         # Simplified: barriers are no-ops in single-warp simulation
         pass
+
+    def _exec_barrier(self, instr: Instruction) -> None:
+        """
+        Execute barrier instructions (barrier.sync, barrier.cluster, membar).
+
+        barrier.sync - Synchronize all threads in CTA
+        barrier.cluster - Cluster barrier (arrive/wait pattern)
+        membar - Memory barrier
+        fence.proxy - Proxy fence for sync/async memory ordering
+        wgmma.fence - Warpgroup fence for async MMA operations
+
+        PTX specification:
+        - barrier.sync provides full memory fence for CTA scope
+        - All pending memory operations become visible
+        - Threads wait until all threads arrive
+        """
+        if instr.opcode == Opcode.MEMBAR:
+            # MEMBAR instruction - handle in _exec_membar
+            self._exec_membar(instr)
+
+        elif instr.opcode == Opcode.BARRIER or instr.opcode == Opcode.BARRIER_CTA:
+            # barrier.sync or barrier.cta
+            # Format: BARRIER or BARRIER.CTA
+
+            # For simplicity in current simulation, assume:
+            # - Single warp = all threads arrive simultaneously
+            # - Just need to flush pending memory operations
+
+            # Get thread info for barrier manager
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            thread = self.warp.threads[lane_id]
+            thread_id = thread.thread_id
+            warp_id = self.warp.warp_id
+            # Compute CTA ID (simplified: treat each warp as separate CTA for now)
+            cta_id = warp_id
+
+            # Call barrier sync - returns True if complete
+            complete = self.memory.barrier_manager.barrier_sync(
+                barrier_id=0,  # Single barrier ID
+                num_threads=self.warp.WARP_SIZE,
+                thread_id=thread_id,
+                warp_id=warp_id,
+                cta_id=cta_id
+            )
+
+            if complete:
+                # All threads arrived, operations are now visible
+                pass
+
+        elif instr.opcode == Opcode.BARRIER_CLUSTER:
+            # barrier.cluster - arrive/wait pattern
+            # Format: BARRIER.CLUSTER
+            # For simplified simulation, treat same as barrier.sync
+            self._exec_barrier(instr)
+
+        elif instr.opcode in {Opcode.BAR, Opcode.BAR_WARP}:
+            # Old PTX BAR instruction - simplified
+            pass
+
+        # ==================== Proxy Fence Instructions ====================
+        elif instr.opcode in {Opcode.FENCE_PROXY, Opcode.FENCE_PROXY_DOT}:
+            # fence.proxy - Generic proxy fence
+            # Establishes memory ordering between different memory proxies
+            # Ensures ordering between sync and async operations
+            from ..core.memory import Scope, MemoryOrder
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            thread = self.warp.threads[lane_id]
+            thread_id = thread.thread_id
+            warp_id = self.warp.warp_id
+            cta_id = warp_id
+
+            # Flush all pending async operations
+            self.memory.barrier_manager.fence(
+                scope=Scope.CTA,
+                order=MemoryOrder.ACQ_REL,
+                thread_id=thread_id,
+                warp_id=warp_id,
+                cta_id=cta_id
+            )
+
+        elif instr.opcode in {Opcode.FENCE_PROXY_ASYNC, Opcode.FENCE_PROXY_ASYNC_DOT}:
+            # fence.proxy.async - Async proxy fence
+            # Synchronizes between generic proxy and async proxy
+            # Ensures async TMA/WGMMA operations are visible
+            from ..core.memory import Scope, MemoryOrder
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            thread = self.warp.threads[lane_id]
+            thread_id = thread.thread_id
+            warp_id = self.warp.warp_id
+            cta_id = warp_id
+
+            # Flush async operations and make them visible
+            self.memory.barrier_manager.fence(
+                scope=Scope.CTA,
+                order=MemoryOrder.SC,  # Strong ordering for async
+                thread_id=thread_id,
+                warp_id=warp_id,
+                cta_id=cta_id
+            )
+
+        elif instr.opcode in {Opcode.FENCE_PROXY_TENSORMAP, Opcode.FENCE_PROXY_TENSORMAP_DOT}:
+            # fence.proxy.tensormap - Tensormap proxy fence
+            # Synchronizes tensormap proxy operations
+            # Used with WGMMA tensor operations
+            from ..core.memory import Scope, MemoryOrder
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            thread = self.warp.threads[lane_id]
+            thread_id = thread.thread_id
+            warp_id = self.warp.warp_id
+            cta_id = warp_id
+
+            # Flush tensor operations
+            self.memory.barrier_manager.fence(
+                scope=Scope.GPU,  # Tensor ops typically use GPU scope
+                order=MemoryOrder.ACQ_REL,
+                thread_id=thread_id,
+                warp_id=warp_id,
+                cta_id=cta_id
+            )
+
+        # ==================== Warpgroup Fence Instructions ====================
+        elif instr.opcode in {Opcode.WGMMA_FENCE, Opcode.WGMMA_FENCE_DOT}:
+            # wgmma.fence - Warpgroup fence
+            # Ensures ordering of async warpgroup MMA operations
+            # Prevents subsequent WGMMA from starting until previous complete
+            from ..core.memory import Scope, MemoryOrder
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            thread = self.warp.threads[lane_id]
+            thread_id = thread.thread_id
+            warp_id = self.warp.warp_id
+            cta_id = warp_id
+
+            # Flush warpgroup operations
+            self.memory.barrier_manager.fence(
+                scope=Scope.CTA,
+                order=MemoryOrder.SC,
+                thread_id=thread_id,
+                warp_id=warp_id,
+                cta_id=cta_id
+            )
+
+        elif instr.opcode in {Opcode.WGMMA_COMMIT_GROUP, Opcode.WGMMA_COMMIT_GROUP_DOT}:
+            # wgmma.commit_group - Commit warpgroup async group
+            # Marks completion of a group of async WGMMA operations
+            # This allows dependent operations to proceed
+            from ..core.memory import Scope, MemoryOrder
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+
+            # Commit all pending WGMMA operations in current group
+            # For simulation: mark async queue operations as complete
+            if hasattr(self, 'wgmma_group_id'):
+                self.wgmma_group_id += 1
+            else:
+                self.wgmma_group_id = 1
+
+            # Flush operations to make them visible
+            self.memory.barrier_manager.fence(
+                scope=Scope.CTA,
+                order=MemoryOrder.RELEASE,
+                thread_id=0,
+                warp_id=self.warp.warp_id,
+                cta_id=self.warp.warp_id
+            )
+
+        elif instr.opcode in {Opcode.WGMMA_WAIT_GROUP, Opcode.WGMMA_WAIT_GROUP_DOT}:
+            # wgmma.wait_group - Wait for warpgroup async group
+            # Stalls until specified group of WGMMA operations complete
+            # Format: wgmma.wait_group group_id
+            from ..core.memory import Scope, MemoryOrder
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            thread = self.warp.threads[lane_id]
+            thread_id = thread.thread_id
+            warp_id = self.warp.warp_id
+            cta_id = warp_id
+
+            # Get group ID to wait for (default: 0 = current group)
+            wait_group = instr.operands[0].value if len(instr.operands) > 0 else 0
+
+            # For simulation: check if group is complete
+            # In real hardware, this would stall the warp
+            # For now, we'll just acquire the fence
+            self.memory.barrier_manager.fence(
+                scope=Scope.CTA,
+                order=MemoryOrder.ACQUIRE,
+                thread_id=thread_id,
+                warp_id=warp_id,
+                cta_id=cta_id
+            )
+
+    def _exec_fence(self, instr: Instruction) -> None:
+        """
+        Execute fence instructions for memory ordering.
+
+        FENCE.SC - Sequential consistency fence
+        FENCE.ACQ_REL - Acquire-release fence
+
+        These ensure memory ordering according to PTX specification.
+        """
+        # Get thread info for barrier manager
+        lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+        thread = self.warp.threads[lane_id]
+        thread_id = thread.thread_id
+        warp_id = self.warp.warp_id
+        cta_id = warp_id  # Simplified
+
+        from ..core.memory import MemoryOrder, Scope
+
+        if instr.opcode == Opcode.FENCE_SC:
+            # Sequential consistency fence - strongest ordering
+            self.memory.barrier_manager.fence(
+                scope=Scope.CTA,
+                order=MemoryOrder.SC,
+                thread_id=thread_id,
+                warp_id=warp_id,
+                cta_id=cta_id
+            )
+
+        elif instr.opcode == Opcode.FENCE_ACQ_REL:
+            # Acquire-release fence
+            self.memory.barrier_manager.fence(
+                scope=Scope.CTA,
+                order=MemoryOrder.ACQ_REL,
+                thread_id=thread_id,
+                warp_id=warp_id,
+                cta_id=cta_id
+            )
+
+    def _exec_membar(self, instr: Instruction) -> None:
+        """
+        Execute MEMBAR instruction (global memory barrier).
+
+        MEMBAR - Memory barrier for global memory visibility
+        MEMBAR.CTA - CTA scope
+        MEMBAR.GL - GPU scope
+        MEMBAR.SYS - System scope
+        """
+        # Get thread info
+        lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+        thread = self.warp.threads[lane_id]
+        thread_id = thread.thread_id
+        warp_id = self.warp.warp_id
+        cta_id = warp_id  # Simplified
+
+        from ..core.memory import Scope
+
+        # Default to CTA scope
+        scope = Scope.CTA
+
+        # Check if scope is specified in instruction
+        if len(instr.operands) > 0:
+            scope_val = instr.operands[0].value
+            if isinstance(scope_val, str):
+                if "CTA" in scope_val.upper():
+                    scope = Scope.CTA
+                elif "GPU" in scope_val.upper() or "GL" in scope_val.upper():
+                    scope = Scope.GPU
+                elif "SYS" in scope_val.upper():
+                    scope = Scope.SYSTEM
+            elif isinstance(scope_val, int):
+                # Numeric scope encoding
+                scope = Scope(scope_val)
+
+        self.memory.barrier_manager.membar(scope=scope)
 
     # ==================== New Integer Arithmetic Functions ====================
 
@@ -783,7 +1072,7 @@ class WarpExecutor:
     def _exec_store(self, instr: Instruction) -> None:
         """Generic store handler"""
         addr_str = instr.operands[0].value
-        src = instr.operands[1].value
+        src_operand = instr.operands[1]
 
         # Determine memory space
         if instr.opcode in {Opcode.STG, Opcode.ST}:
@@ -797,7 +1086,11 @@ class WarpExecutor:
 
         for lane_id in self.warp.get_executing_lane_ids():
             addr = self._compute_address(addr_str, lane_id)
-            value = self.warp.read_lane_reg(lane_id, src)
+            # Get value - can be register or immediate
+            if src_operand.type == OperandType.IMMEDIATE:
+                value = src_operand.value
+            else:
+                value = self.warp.read_lane_reg(lane_id, src_operand.value)
             self.memory.write_u32(space, addr, value)
 
     # ==================== New Control Flow Functions ====================
@@ -832,17 +1125,48 @@ class WarpExecutor:
 
     def _exec_setp(self, instr: Instruction) -> None:
         """Execute SETP/PSETP: Set predicate from comparison"""
-        # Simplified: set all predicates based on comparison
         pred_dst = instr.operands[0].value
         src1 = instr.operands[1].value if len(instr.operands) > 1 else 0
-        src2 = instr.operands[2].value if len(instr.operands) > 2 else 0
+        src2_or_imm = instr.operands[2].value if len(instr.operands) > 2 else 0
 
-        for lane_id in self.warp.get_executing_lane_ids():
-            val1 = self.warp.read_lane_reg(lane_id, src1)
-            val2 = self.warp.read_lane_reg(lane_id, src2)
-            # Simple comparison: less than
-            result = c_int32(val1).value < c_int32(val2).value
-            self.warp.get_thread(lane_id).set_pred(result)
+        # Extract comparison type from full_opcode (e.g., "setp.eq" -> "eq")
+        comparison_op = "lt"  # Default
+        if instr.full_opcode:
+            parts = instr.full_opcode.split(".")
+            if len(parts) > 1:
+                comparison_op = parts[1]
+
+        # Define comparison operations
+        comparisons = {
+            "eq": lambda a, b: a == b,
+            "ne": lambda a, b: a != b,
+            "lt": lambda a, b: a < b,
+            "le": lambda a, b: a <= b,
+            "gt": lambda a, b: a > b,
+            "ge": lambda a, b: a >= b,
+            "lo": lambda a, b: a < b,  # unsigned less than
+            "ls": lambda a, b: a <= b, # unsigned less than or equal
+            "hi": lambda a, b: a > b,  # unsigned greater than
+            "hs": lambda a, b: a >= b, # unsigned greater than or equal
+        }
+
+        # Get comparison function
+        compare = comparisons.get(comparison_op, comparisons["lt"])
+
+        # Check if src2 is an immediate
+        if len(instr.operands) > 2 and instr.operands[2].type == OperandType.IMMEDIATE:
+            val2 = src2_or_imm
+            for lane_id in self.warp.get_executing_lane_ids():
+                val1 = self.warp.read_lane_reg(lane_id, src1)
+                result = compare(val1, val2)
+                self.warp.get_thread(lane_id).set_pred(result)
+        else:
+            # Both operands are registers
+            for lane_id in self.warp.get_executing_lane_ids():
+                val1 = self.warp.read_lane_reg(lane_id, src1)
+                val2 = self.warp.read_lane_reg(lane_id, src2_or_imm)
+                result = compare(val1, val2)
+                self.warp.get_thread(lane_id).set_pred(result)
 
     def _exec_selp(self, instr: Instruction) -> None:
         """Execute SELP: Select based on predicate"""
@@ -991,7 +1315,8 @@ class WarpExecutor:
                     global_addr = op.src_addr + offset
                     shared_addr = op.dst_addr + offset
                     value = self.memory.read_u32(MemorySpace.GLOBAL, global_addr)
-                    self.memory.write_u32(MemorySpace.SHARED, shared_addr, value)
+                    # Write via ASYNC proxy (TMA operation)
+                    self.memory.write_u32(MemorySpace.SHARED, shared_addr, value, proxy=ProxyType.ASYNC)
 
                 # Signal mbarrier completion if mbarrier_addr is set
                 if hasattr(op, 'mbarrier_addr') and op.mbarrier_addr is not None:
@@ -1029,7 +1354,8 @@ class WarpExecutor:
                     shared_addr = op.src_addr + offset
                     global_addr = op.dst_addr + offset
                     value = self.memory.read_u32(MemorySpace.SHARED, shared_addr)
-                    self.memory.write_u32(MemorySpace.GLOBAL, global_addr, value)
+                    # Write via ASYNC proxy (TMA operation)
+                    self.memory.write_u32(MemorySpace.GLOBAL, global_addr, value, proxy=ProxyType.ASYNC)
 
                 # Signal mbarrier completion if mbarrier_addr is set
                 if hasattr(op, 'mbarrier_addr') and op.mbarrier_addr is not None:
@@ -1055,6 +1381,300 @@ class WarpExecutor:
             # For now, we don't block here - the async operations complete
             # in the background based on their cycle count
             pass
+
+        # ==================== CP.ASYNC.BULK Instructions ====================
+        elif instr.opcode in {Opcode.CP_ASYNC_BULK, Opcode.CP_ASYNC_BULK_DOT}:
+            # cp.async.bulk: Async bulk copy from global to shared memory
+            # Format: cp.async.bulk.shared::cta [dst], [src], size
+            dst_addr_str = instr.operands[0].value
+            src_addr_str = instr.operands[1].value
+
+            # Get size - can be register or immediate
+            if len(instr.operands) > 2:
+                size_operand = instr.operands[2]
+                if size_operand.type == OperandType.IMMEDIATE:
+                    size = size_operand.value
+                else:
+                    # Read from register
+                    lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+                    size = self.warp.read_lane_reg(lane_id, size_operand.value)
+            else:
+                size = 128
+
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            dst_addr = self._compute_address(dst_addr_str, lane_id)
+            src_addr = self._compute_address(src_addr_str, lane_id)
+
+            # Queue async bulk copy operation
+            def bulk_copy_complete(op: AsyncOperation) -> None:
+                """Callback when bulk copy completes."""
+                for offset in range(0, op.size, 4):
+                    global_addr = op.src_addr + offset
+                    shared_addr = op.dst_addr + offset
+                    # Read from global (generic proxy is fine for source)
+                    value = self.memory.read_u32(MemorySpace.GLOBAL, global_addr)
+                    # Write to shared via ASYNC proxy (TMA operation)
+                    self.memory.write_u32(MemorySpace.SHARED, shared_addr, value, proxy=ProxyType.ASYNC)
+
+                # Signal mbarrier completion if linked
+                if hasattr(op, 'mbarrier_addr') and op.mbarrier_addr is not None:
+                    self.mbarrier_manager.complete_tx(op.mbarrier_addr)
+
+            bulk_op = self.async_queue.create_tma_load(
+                dst_addr=dst_addr,
+                src_addr=src_addr,
+                size=size,
+                warp_id=self.warp.warp_id,
+                cycles=10  # Simulated latency
+            )
+            bulk_op.callback = bulk_copy_complete
+            if self.active_mbarrier_addr is not None:
+                bulk_op.mbarrier_addr = self.active_mbarrier_addr
+            self.async_queue.submit(bulk_op)
+
+        elif instr.opcode in {Opcode.CP_ASYNC_BULK_TENSOR, Opcode.CP_ASYNC_BULK_TENSOR_DOT}:
+            # cp.async.bulk.tensor: Async bulk tensor copy
+            # Format: cp.async.bulk.tensor.shared::cta [dst], [src], size, [stride]
+            dst_addr_str = instr.operands[0].value
+            src_addr_str = instr.operands[1].value
+            size = instr.operands[2].value if len(instr.operands) > 2 else 128
+            stride_str = instr.operands[3].value if len(instr.operands) > 3 else None
+
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            dst_addr = self._compute_address(dst_addr_str, lane_id)
+            src_addr = self._compute_address(src_addr_str, lane_id)
+
+            # Queue async tensor copy operation with stride support
+            def tensor_copy_complete(op: AsyncOperation) -> None:
+                """Callback when tensor copy completes."""
+                # Tensor memory layout with stride
+                stride = getattr(op, 'stride', size)
+                for i in range(op.size // 16):  # Assume 16-byte tiles
+                    tile_src = op.src_addr + i * stride
+                    tile_dst = op.dst_addr + i * 16
+                    for offset in range(0, min(16, op.size - i * 16), 4):
+                        global_addr = tile_src + offset
+                        shared_addr = tile_dst + offset
+                        value = self.memory.read_u32(MemorySpace.GLOBAL, global_addr)
+                        # Write via ASYNC proxy (TMA operation)
+                        self.memory.write_u32(MemorySpace.SHARED, shared_addr, value, proxy=ProxyType.ASYNC)
+
+                if hasattr(op, 'mbarrier_addr') and op.mbarrier_addr is not None:
+                    self.memory.barrier_manager.mbarrier_complete_tx(
+                        op.mbarrier_addr, 1, self.warp.warp_id
+                    )
+
+            tensor_op = self.async_queue.create_tma_load(
+                dst_addr=dst_addr,
+                src_addr=src_addr,
+                size=size,
+                warp_id=self.warp.warp_id,
+                cycles=15  # Higher latency for tensor operations
+            )
+            tensor_op.callback = tensor_copy_complete
+            if stride_str is not None:
+                tensor_op.stride = self._compute_address(stride_str, lane_id) - src_addr
+            if self.active_mbarrier_addr is not None:
+                tensor_op.mbarrier_addr = self.active_mbarrier_addr
+            self.async_queue.submit(tensor_op)
+
+        elif instr.opcode in {Opcode.CP_ASYNC_BULK_PREFETCH, Opcode.CP_ASYNC_BULK_PREFETCH_DOT}:
+            # cp.async.bulk.prefetch: Async bulk prefetch
+            # Similar to cp.async.bulk but with prefetch semantics (no immediate use)
+            dst_addr_str = instr.operands[0].value
+            src_addr_str = instr.operands[1].value
+            size = instr.operands[2].value if len(instr.operands) > 2 else 128
+
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            dst_addr = self._compute_address(dst_addr_str, lane_id)
+            src_addr = self._compute_address(src_addr_str, lane_id)
+
+            # Prefetch - same as bulk copy but with lower priority
+            prefetch_op = self.async_queue.create_tma_load(
+                dst_addr=dst_addr,
+                src_addr=src_addr,
+                size=size,
+                warp_id=self.warp.warp_id,
+                cycles=8  # Slightly lower latency
+            )
+            self.async_queue.submit(prefetch_op)
+
+        elif instr.opcode in {Opcode.CP_ASYNC_BULK_PREFETCH_TENSOR, Opcode.CP_ASYNC_BULK_PREFETCH_TENSOR_DOT}:
+            # cp.async.bulk.prefetch.tensor: Async bulk tensor prefetch
+            dst_addr_str = instr.operands[0].value
+            src_addr_str = instr.operands[1].value
+            size = instr.operands[2].value if len(instr.operands) > 2 else 128
+            stride_str = instr.operands[3].value if len(instr.operands) > 3 else None
+
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            dst_addr = self._compute_address(dst_addr_str, lane_id)
+            src_addr = self._compute_address(src_addr_str, lane_id)
+
+            prefetch_tensor_op = self.async_queue.create_tma_load(
+                dst_addr=dst_addr,
+                src_addr=src_addr,
+                size=size,
+                warp_id=self.warp.warp_id,
+                cycles=12  # Latency for tensor prefetch
+            )
+            if stride_str is not None:
+                prefetch_tensor_op.stride = self._compute_address(stride_str, lane_id) - src_addr
+            self.async_queue.submit(prefetch_tensor_op)
+
+        elif instr.opcode in {Opcode.CP_REDUCE_ASYNC_BULK, Opcode.CP_REDUCE_ASYNC_BULK_DOT}:
+            # cp.reduce.async.bulk: Async bulk reduction
+            # Performs reduction operation while copying
+            dst_addr_str = instr.operands[0].value
+            src_addr_str = instr.operands[1].value
+            size = instr.operands[2].value if len(instr.operands) > 2 else 128
+
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            dst_addr = self._compute_address(dst_addr_str, lane_id)
+            src_addr = self._compute_address(src_addr_str, lane_id)
+
+            def reduce_complete(op: AsyncOperation) -> None:
+                """Callback when reduction completes."""
+                # Read-Modify-Write reduction (add)
+                for offset in range(0, op.size, 4):
+                    global_addr = op.src_addr + offset
+                    shared_addr = op.dst_addr + offset
+                    src_val = self.memory.read_u32(MemorySpace.GLOBAL, global_addr)
+                    dst_val = self.memory.read_u32(MemorySpace.SHARED, shared_addr)
+                    # Write via ASYNC proxy (TMA reduction operation)
+                    self.memory.write_u32(MemorySpace.SHARED, shared_addr, dst_val + src_val, proxy=ProxyType.ASYNC)
+
+            reduce_op = self.async_queue.create_tma_load(
+                dst_addr=dst_addr,
+                src_addr=src_addr,
+                size=size,
+                warp_id=self.warp.warp_id,
+                cycles=20  # Higher latency for reductions
+            )
+            reduce_op.callback = reduce_complete
+            self.async_queue.submit(reduce_op)
+
+        elif instr.opcode in {Opcode.CP_REDUCE_ASYNC_BULK_TENSOR, Opcode.CP_REDUCE_ASYNC_BULK_TENSOR_DOT}:
+            # cp.reduce.async.bulk.tensor: Async bulk tensor reduction
+            dst_addr_str = instr.operands[0].value
+            src_addr_str = instr.operands[1].value
+            size = instr.operands[2].value if len(instr.operands) > 2 else 128
+            stride_str = instr.operands[3].value if len(instr.operands) > 3 else None
+
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            dst_addr = self._compute_address(dst_addr_str, lane_id)
+            src_addr = self._compute_address(src_addr_str, lane_id)
+
+            def tensor_reduce_complete(op: AsyncOperation) -> None:
+                """Callback when tensor reduction completes."""
+                stride = getattr(op, 'stride', size)
+                for i in range(op.size // 16):
+                    tile_src = op.src_addr + i * stride
+                    tile_dst = op.dst_addr + i * 16
+                    for offset in range(0, min(16, op.size - i * 16), 4):
+                        global_addr = tile_src + offset
+                        shared_addr = tile_dst + offset
+                        src_val = self.memory.read_u32(MemorySpace.GLOBAL, global_addr)
+                        dst_val = self.memory.read_u32(MemorySpace.SHARED, shared_addr)
+                        # Write via ASYNC proxy (TMA reduction operation)
+                        self.memory.write_u32(MemorySpace.SHARED, shared_addr, dst_val + src_val, proxy=ProxyType.ASYNC)
+
+            reduce_tensor_op = self.async_queue.create_tma_load(
+                dst_addr=dst_addr,
+                src_addr=src_addr,
+                size=size,
+                warp_id=self.warp.warp_id,
+                cycles=25  # Highest latency for tensor reductions
+            )
+            reduce_tensor_op.callback = tensor_reduce_complete
+            if stride_str is not None:
+                reduce_tensor_op.stride = self._compute_address(stride_str, lane_id) - src_addr
+            self.async_queue.submit(reduce_tensor_op)
+
+        elif instr.opcode in {Opcode.CP_ASYNC_BULK_COMMIT_GROUP, Opcode.CP_ASYNC_BULK_COMMIT_GROUP_DOT}:
+            # cp.async.bulk.commit_group: Commit async bulk group
+            # Marks completion of a group of async bulk operations
+            group_id = instr.operands[0].value if len(instr.operands) > 0 else 0
+
+            # For simulation: track group completion
+            if not hasattr(self, 'cp_async_group_id'):
+                self.cp_async_group_id = 0
+            self.cp_async_group_id = max(self.cp_async_group_id, group_id + 1)
+
+            # Flush pending operations in this group
+            from ..core.memory import Scope, MemoryOrder
+            self.memory.barrier_manager.fence(
+                scope=Scope.CTA,
+                order=MemoryOrder.RELEASE,
+                thread_id=0,
+                warp_id=self.warp.warp_id,
+                cta_id=self.warp.warp_id
+            )
+
+        elif instr.opcode in {Opcode.CP_ASYNC_BULK_WAIT_GROUP, Opcode.CP_ASYNC_BULK_WAIT_GROUP_DOT}:
+            # cp.async.bulk.wait_group: Wait for async bulk group
+            # Stalls until specified group completes
+            wait_group = instr.operands[0].value if len(instr.operands) > 0 else 0
+
+            # For simulation: acquire fence
+            from ..core.memory import Scope, MemoryOrder
+            self.memory.barrier_manager.fence(
+                scope=Scope.CTA,
+                order=MemoryOrder.ACQUIRE,
+                thread_id=0,
+                warp_id=self.warp.warp_id,
+                cta_id=self.warp.warp_id
+            )
+
+        elif instr.opcode in {Opcode.MULTIMEM_CP_ASYNC_BULK, Opcode.MULTIMEM_CP_ASYNC_BULK_DOT}:
+            # multimem.cp.async.bulk: Multimem async bulk copy
+            # Similar to cp.async.bulk but uses multimem (multiple memory channels)
+            dst_addr_str = instr.operands[0].value
+            src_addr_str = instr.operands[1].value
+            size = instr.operands[2].value if len(instr.operands) > 2 else 128
+
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            dst_addr = self._compute_address(dst_addr_str, lane_id)
+            src_addr = self._compute_address(src_addr_str, lane_id)
+
+            # Multimem - higher bandwidth, lower latency
+            multimem_op = self.async_queue.create_tma_load(
+                dst_addr=dst_addr,
+                src_addr=src_addr,
+                size=size,
+                warp_id=self.warp.warp_id,
+                cycles=5  # Lower latency due to multimem
+            )
+            self.async_queue.submit(multimem_op)
+
+        elif instr.opcode in {Opcode.MULTIMEM_CP_REDUCE_ASYNC_BULK, Opcode.MULTIMEM_CP_REDUCE_ASYNC_BULK_DOT}:
+            # multimem.cp.reduce.async.bulk: Multimem async bulk reduction
+            dst_addr_str = instr.operands[0].value
+            src_addr_str = instr.operands[1].value
+            size = instr.operands[2].value if len(instr.operands) > 2 else 128
+
+            lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+            dst_addr = self._compute_address(dst_addr_str, lane_id)
+            src_addr = self._compute_address(src_addr_str, lane_id)
+
+            def multimem_reduce_complete(op: AsyncOperation) -> None:
+                """Callback when multimem reduction completes."""
+                for offset in range(0, op.size, 4):
+                    global_addr = op.src_addr + offset
+                    shared_addr = op.dst_addr + offset
+                    src_val = self.memory.read_u32(MemorySpace.GLOBAL, global_addr)
+                    dst_val = self.memory.read_u32(MemorySpace.SHARED, shared_addr)
+                    # Write via ASYNC proxy (multimem reduction operation)
+                    self.memory.write_u32(MemorySpace.SHARED, shared_addr, dst_val + src_val, proxy=ProxyType.ASYNC)
+
+            multimem_reduce_op = self.async_queue.create_tma_load(
+                dst_addr=dst_addr,
+                src_addr=src_addr,
+                size=size,
+                warp_id=self.warp.warp_id,
+                cycles=10  # Lower latency than regular reduce
+            )
+            multimem_reduce_op.callback = multimem_reduce_complete
+            self.async_queue.submit(multimem_reduce_op)
 
     def _exec_wgmma(self, instr: Instruction) -> None:
         """
@@ -1117,13 +1737,27 @@ class WarpExecutor:
         1. mbarrier.try_wait [addr] - spins until ready
         2. Consume data
         """
+        # Get thread info
         lane_id = next(iter(self.warp.get_executing_lane_ids()), 0)
+        thread = self.warp.threads[lane_id]
+        thread_id = thread.thread_id
+        warp_id = self.warp.warp_id
 
-        if instr.opcode == Opcode.MBARRIER_INIT:
+        if instr.opcode in {Opcode.MBARRIER_INIT, Opcode.MBARRIER_INIT_DOT}:
             # MBARRIER_INIT: Initialize mbarrier
             # Format: MBARRIER_INIT [mbarrier_addr], count
             mbarrier_addr_str = instr.operands[0].value
-            count = instr.operands[1].value if len(instr.operands) > 1 else 1
+
+            # Get count - can be register or immediate
+            if len(instr.operands) > 1:
+                count_operand = instr.operands[1]
+                if count_operand.type == OperandType.IMMEDIATE:
+                    count = count_operand.value
+                else:
+                    # Read from register
+                    count = self.warp.read_lane_reg(lane_id, count_operand.value)
+            else:
+                count = 1
 
             addr = self._compute_address(mbarrier_addr_str, lane_id)
             self.mbarrier_manager.init_barrier(addr, count, self.warp.warp_id)
@@ -1131,7 +1765,7 @@ class WarpExecutor:
             # Also write to shared memory for debugging/visibility
             self.memory.write_u32(MemorySpace.SHARED, addr, count)
 
-        elif instr.opcode == Opcode.MBARRIER_INVAL:
+        elif instr.opcode in {Opcode.MBARRIER_INVAL, Opcode.MBARRIER_INVAL_DOT}:
             # MBARRIER_INVAL: Invalidate mbarrier
             mbarrier_addr_str = instr.operands[0].value
 
@@ -1139,60 +1773,167 @@ class WarpExecutor:
             self.mbarrier_manager.invalidate(addr)
             self.memory.write_u32(MemorySpace.SHARED, addr, 0)
 
-        elif instr.opcode == Opcode.MBARRIER_ARRIVE:
+        elif instr.opcode in {Opcode.MBARRIER_ARRIVE, Opcode.MBARRIER_ARRIVE_DOT}:
             # MBARRIER_ARRIVE: Arrive at mbarrier (decrement counter)
+            # This signals that one thread/warp has reached the barrier
             mbarrier_addr_str = instr.operands[0].value
 
             addr = self._compute_address(mbarrier_addr_str, lane_id)
-            current = self.memory.read_u32(MemorySpace.SHARED, addr)
-            if current > 0:
-                self.memory.write_u32(MemorySpace.SHARED, addr, current - 1)
 
-        elif instr.opcode == Opcode.MBARRIER_TEST_WAIT:
+            # Decrement counter in mbarrier
+            self.mbarrier_manager.complete_tx(addr)
+
+            # Update shared memory for visibility
+            barrier = self.mbarrier_manager.get_barrier(addr)
+            if barrier:
+                self.memory.write_u32(MemorySpace.SHARED, addr, barrier.current_count)
+
+        elif instr.opcode in {Opcode.MBARRIER_TEST_WAIT, Opcode.MBARRIER_TEST_WAIT_DOT}:
             # MBARRIER_TEST_WAIT: Test and wait for mbarrier
-            # Spins until mbarrier is ready
+            # Stalls warp at this instruction until mbarrier is ready
             mbarrier_addr_str = instr.operands[0].value
             addr = self._compute_address(mbarrier_addr_str, lane_id)
 
-            # Set predicate to true if ready, false if not
+            # Test if barrier is ready
             ready = self.mbarrier_manager.try_wait(addr)
-            # Set predicate register (R0) to result
-            self.warp.write_lane_reg(lane_id, 0, 1 if ready else 0)
 
-        elif instr.opcode == Opcode.MBARRIER_EXPECT_TX:
+            if ready:
+                # Barrier is satisfied, continue execution
+                # Set predicate register (R0) to true
+                self.warp.write_lane_reg(lane_id, 0, 1)
+                # Unstall the warp so it can continue
+                self.warp.unstall()
+            else:
+                # Barrier not ready, stall the warp
+                # The warp will not advance PC this cycle
+                self.warp.stall("mbarrier_test_wait")
+                # Don't advance PC - warp stays at this instruction
+                return True
+
+        elif instr.opcode in {Opcode.MBARRIER_EXPECT_TX, Opcode.MBARRIER_EXPECT_TX_DOT}:
             # MBARRIER_EXPECT_TX: Expect transaction (producer)
             # Tells mbarrier how many async operations to expect
             # Also links subsequent TMA operations to this mbarrier
             mbarrier_addr_str = instr.operands[0].value
-            count = instr.operands[1].value if len(instr.operands) > 1 else 1
+
+            # Get count - can be register or immediate
+            if len(instr.operands) > 1:
+                count_operand = instr.operands[1]
+                if count_operand.type == OperandType.IMMEDIATE:
+                    count = count_operand.value
+                else:
+                    # Read from register
+                    count = self.warp.read_lane_reg(lane_id, count_operand.value)
+            else:
+                count = 1
 
             addr = self._compute_address(mbarrier_addr_str, lane_id)
+            # Set expected transaction count
             self.mbarrier_manager.expect_tx(addr, count)
             self.memory.write_u32(MemorySpace.SHARED, addr, count)
 
             # Track this mbarrier for subsequent TMA operations
             self.active_mbarrier_addr = addr
 
-        elif instr.opcode == Opcode.MBARRIER_COMPLETE_TX:
+        elif instr.opcode in {Opcode.MBARRIER_COMPLETE_TX, Opcode.MBARRIER_COMPLETE_TX_DOT}:
             # MBARRIER_COMPLETE_TX: Complete transaction
             # Called manually or by async operation callback
             mbarrier_addr_str = instr.operands[0].value
 
             addr = self._compute_address(mbarrier_addr_str, lane_id)
-            is_complete = self.mbarrier_manager.complete_tx(addr)
-            current = self.mbarrier_manager.get_barrier(addr).current_count if self.mbarrier_manager.get_barrier(addr) else 0
+            # Mark transaction as complete in memory system's barrier manager
+            if hasattr(self.memory.barrier_manager, '_mbarriers') and addr in self.memory.barrier_manager._mbarriers:
+                mbarrier = self.memory.barrier_manager._mbarriers[addr]
+                mbarrier.completed_phase = mbarrier.phase
+            current = self.memory.read_u32(MemorySpace.SHARED, addr)
             self.memory.write_u32(MemorySpace.SHARED, addr, current)
+
+        elif instr.opcode in {Opcode.MBARRIER_ARRIVE_DROP, Opcode.MBARRIER_ARRIVE_DROP_DOT}:
+            # MBARRIER_ARRIVE_DROP: Arrive at mbarrier and reduce threshold
+            # Reduces the expected count (useful for dynamic thread counts)
+            mbarrier_addr_str = instr.operands[0].value
+            drop_count = instr.operands[1].value if len(instr.operands) > 1 else 1
+
+            addr = self._compute_address(mbarrier_addr_str, lane_id)
+
+            # Update both shared memory and mbarrier manager
+            current = self.memory.read_u32(MemorySpace.SHARED, addr)
+            new_count = max(0, current - drop_count)
+            self.memory.write_u32(MemorySpace.SHARED, addr, new_count)
+
+            # Update mbarrier manager's expected count
+            if hasattr(self.memory.barrier_manager, '_mbarriers') and addr in self.memory.barrier_manager._mbarriers:
+                mbarrier = self.memory.barrier_manager._mbarriers[addr]
+                mbarrier.expected_count = max(0, mbarrier.expected_count - drop_count)
+
+        elif instr.opcode in {Opcode.MBARRIER_TRY_WAIT, Opcode.MBARRIER_TRY_WAIT_DOT}:
+            # MBARRIER_TRY_WAIT: Try wait for mbarrier (non-blocking)
+            # Returns a predicate indicating if barrier is ready
+            # Unlike test_wait, this doesn't stall - it sets a predicate
+            mbarrier_addr_str = instr.operands[0].value
+            pred_reg = instr.operands[1].value if len(instr.operands) > 1 else 0
+
+            addr = self._compute_address(mbarrier_addr_str, lane_id)
+
+            # Get current phase from shared memory
+            current = self.memory.read_u32(MemorySpace.SHARED, addr)
+            phase = current % 2
+
+            # Test if barrier is ready (non-blocking)
+            ready = self.mbarrier_manager.try_wait(addr)
+
+            # Set predicate register to indicate readiness
+            # Note: PTX uses predicate registers, here we use R0 as a simple predicate
+            self.warp.write_lane_reg(lane_id, pred_reg, 1 if ready else 0)
+
+        elif instr.opcode in {Opcode.MBARRIER_PENDING_COUNT, Opcode.MBARRIER_PENDING_COUNT_DOT}:
+            # MBARRIER_PENDING_COUNT: Get number of pending arrivals
+            # Returns how many arrivals are still needed
+            mbarrier_addr_str = instr.operands[0].value
+            dst_reg = instr.operands[1].value
+
+            addr = self._compute_address(mbarrier_addr_str, lane_id)
+
+            # Get pending count from mbarrier manager
+            barrier = self.mbarrier_manager.get_barrier(addr)
+            if barrier:
+                pending = barrier.current_count
+            else:
+                pending = 0
+
+            # Write pending count to destination register
+            self.warp.write_lane_reg(lane_id, dst_reg, pending)
+
+        elif instr.opcode in {Opcode.CP_ASYNC_MBARRIER_ARRIVE, Opcode.CP_ASYNC_MBARRIER_ARRIVE_DOT}:
+            # CP_ASYNC_MBARRIER_ARRIVE: Async copy with mbarrier arrive
+            # Combines async copy operation with mbarrier arrival
+            # Format: cp.async.mbarrier.arrive [mbar], [src], dst, count
+            mbarrier_addr_str = instr.operands[0].value
+            src_addr_str = instr.operands[1].value
+            dst_reg = instr.operands[2].value if len(instr.operands) > 2 else None
+            count = instr.operands[3].value if len(instr.operands) > 3 else 1
+
+            mbarrier_addr = self._compute_address(mbarrier_addr_str, lane_id)
+            src_addr = self._compute_address(src_addr_str, lane_id)
+
+            # Queue async copy operation
+            self.async_queue.enqueue_copy(src_addr, dst_reg if dst_reg is not None else 0, count)
+
+            # Arrive at mbarrier
+            self.mbarrier_manager.complete_tx(mbarrier_addr)
 
     def _compute_address(self, addr_str: str, lane_id: int) -> int:
         """
         Compute memory address from address string.
 
         Supports formats:
+        - "[0x...]" - literal hexadecimal address
+        - "[0...]" - literal decimal address
         - "[Rn]" - register indirect
         - "[Rn + offset]" - register + immediate offset
 
         Args:
-            addr_str: Address string (e.g., "[R1+16]")
+            addr_str: Address string (e.g., "[R1+16]" or "[0x6000]")
             lane_id: Lane ID for reading register
 
         Returns:
@@ -1201,6 +1942,12 @@ class WarpExecutor:
         import re
         # Remove brackets
         inner = addr_str.strip().strip('[]')
+
+        # Try [0x...] or [0...] - literal addresses (hex or decimal)
+        match = re.match(r'(0x[0-9a-fA-F]+|\d+)', inner)
+        if match:
+            # Literal address
+            return int(match.group(1), 0)  # Auto-detect base
 
         # Try [Rn + offset]
         match = re.match(r'R(\d+)\s*\+\s*(\d+)', inner)

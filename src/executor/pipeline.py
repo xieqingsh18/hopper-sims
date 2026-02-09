@@ -100,10 +100,12 @@ class ExecutionPipeline:
                     done_warps.add(warp_id)
                     continue
 
+                # Mark as active (even if stalled - stalled warps are waiting, not done)
                 active_warps = True
+
                 instr = instr_list[instr_index]
 
-                # Execute instruction
+                # Execute instruction (even if stalled - to retry mbarrier.test_wait)
                 should_continue = warp_executor.execute(instr)
 
                 total_instructions += 1

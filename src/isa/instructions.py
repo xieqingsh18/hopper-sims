@@ -382,12 +382,60 @@ class Opcode(Enum):
     MBARRIER_INVAL_DOT = "mbarrier.inval"  # PTX dot notation
     MBARRIER_ARRIVE = "MBARRIER_ARRIVE"  # Arrive at mbarrier
     MBARRIER_ARRIVE_DOT = "mbarrier.arrive"  # PTX dot notation
+    MBARRIER_ARRIVE_DROP = "MBARRIER_ARRIVE_DROP"  # Arrive and drop threshold
+    MBARRIER_ARRIVE_DROP_DOT = "mbarrier.arrive_drop"  # PTX dot notation
     MBARRIER_TEST_WAIT = "MBARRIER_TEST_WAIT"  # Test and wait mbarrier
     MBARRIER_TEST_WAIT_DOT = "mbarrier.test_wait"  # PTX dot notation
+    MBARRIER_TRY_WAIT = "MBARRIER_TRY_WAIT"  # Try wait mbarrier (non-blocking)
+    MBARRIER_TRY_WAIT_DOT = "mbarrier.try_wait"  # PTX dot notation
+    MBARRIER_PENDING_COUNT = "MBARRIER_PENDING_COUNT"  # Get pending count
+    MBARRIER_PENDING_COUNT_DOT = "mbarrier.pending_count"  # PTX dot notation
     MBARRIER_EXPECT_TX = "MBARRIER_EXPECT_TX"  # Expect transaction
     MBARRIER_EXPECT_TX_DOT = "mbarrier.expect_tx"  # PTX dot notation
     MBARRIER_COMPLETE_TX = "MBARRIER_COMPLETE_TX"  # Complete transaction
     MBARRIER_COMPLETE_TX_DOT = "mbarrier.complete_tx"  # PTX dot notation
+    CP_ASYNC_MBARRIER_ARRIVE = "CP_ASYNC_MBARRIER_ARRIVE"  # Async copy with mbarrier arrive
+    CP_ASYNC_MBARRIER_ARRIVE_DOT = "cp.async.mbarrier.arrive"  # PTX dot notation
+
+    # ==================== Proxy Fence ====================
+    FENCE_PROXY = "FENCE_PROXY"  # Proxy fence
+    FENCE_PROXY_DOT = "fence.proxy"  # PTX dot notation
+    FENCE_PROXY_ASYNC = "FENCE_PROXY_ASYNC"  # Async proxy fence
+    FENCE_PROXY_ASYNC_DOT = "fence.proxy.async"  # PTX dot notation
+    FENCE_PROXY_TENSORMAP = "FENCE_PROXY_TENSORMAP"  # Tensormap proxy fence
+    FENCE_PROXY_TENSORMAP_DOT = "fence.proxy.tensormap"  # PTX dot notation
+
+    # ==================== TMA (Tensor Memory Accelerator) ====================
+    CP_ASYNC_BULK = "CP_ASYNC_BULK"  # Async bulk copy
+    CP_ASYNC_BULK_DOT = "cp.async.bulk"  # PTX dot notation
+    CP_ASYNC_BULK_TENSOR = "CP_ASYNC_BULK_TENSOR"  # Async bulk tensor copy
+    CP_ASYNC_BULK_TENSOR_DOT = "cp.async.bulk.tensor"  # PTX dot notation
+    CP_ASYNC_BULK_PREFETCH = "CP_ASYNC_BULK_PREFETCH"  # Async bulk prefetch
+    CP_ASYNC_BULK_PREFETCH_DOT = "cp.async.bulk.prefetch"  # PTX dot notation
+    CP_ASYNC_BULK_PREFETCH_TENSOR = "CP_ASYNC_BULK_PREFETCH_TENSOR"  # Async bulk prefetch tensor
+    CP_ASYNC_BULK_PREFETCH_TENSOR_DOT = "cp.async.bulk.prefetch.tensor"  # PTX dot notation
+    CP_REDUCE_ASYNC_BULK = "CP_REDUCE_ASYNC_BULK"  # Async bulk reduction
+    CP_REDUCE_ASYNC_BULK_DOT = "cp.reduce.async.bulk"  # PTX dot notation
+    CP_REDUCE_ASYNC_BULK_TENSOR = "CP_REDUCE_ASYNC_BULK_TENSOR"  # Async bulk tensor reduction
+    CP_REDUCE_ASYNC_BULK_TENSOR_DOT = "cp.reduce.async.bulk.tensor"  # PTX dot notation
+    CP_ASYNC_BULK_COMMIT_GROUP = "CP_ASYNC_BULK_COMMIT_GROUP"  # Commit async bulk group
+    CP_ASYNC_BULK_COMMIT_GROUP_DOT = "cp.async.bulk.commit_group"  # PTX dot notation
+    CP_ASYNC_BULK_WAIT_GROUP = "CP_ASYNC_BULK_WAIT_GROUP"  # Wait for async bulk group
+    CP_ASYNC_BULK_WAIT_GROUP_DOT = "cp.async.bulk.wait_group"  # PTX dot notation
+    MULTIMEM_CP_ASYNC_BULK = "MULTIMEM_CP_ASYNC_BULK"  # Multimem async bulk copy
+    MULTIMEM_CP_ASYNC_BULK_DOT = "multimem.cp.async.bulk"  # PTX dot notation
+    MULTIMEM_CP_REDUCE_ASYNC_BULK = "MULTIMEM_CP_REDUCE_ASYNC_BULK"  # Multimem async bulk reduction
+    MULTIMEM_CP_REDUCE_ASYNC_BULK_DOT = "multimem.cp.reduce.async.bulk"  # PTX dot notation
+
+    # ==================== Warpgroup Operations ====================
+    WGMMA_FENCE = "WGMMA_FENCE"  # Warpgroup fence
+    WGMMA_FENCE_DOT = "wgmma.fence"  # PTX dot notation
+    WGMMA_COMMIT_GROUP = "WGMMA_COMMIT_GROUP"  # Warpgroup commit group
+    WGMMA_COMMIT_GROUP_DOT = "wgmma.commit_group"  # PTX dot notation
+    WGMMA_WAIT_GROUP = "WGMMA_WAIT_GROUP"  # Warpgroup wait group
+    WGMMA_WAIT_GROUP_DOT = "wgmma.wait_group"  # PTX dot notation
+    WGMMA_MMA_ASYNC_SP = "WGMMA_MMA_ASYNC_SP"  # Sparse async warpgroup MMA
+    WGMMA_MMA_ASYNC_SP_DOT = "wgmma.mma_async.sp"  # PTX dot notation
 
     # ==================== Texture / Surface ====================
     TEX = "TEX"          # Texture fetch
@@ -675,6 +723,89 @@ INSTRUCTION_FORMATS = {
                                                    [OperandType.MEMORY]),
     Opcode.MBARRIER_COMPLETE_TX_DOT: InstructionFormat("mbarrier.complete_tx", Opcode.MBARRIER_COMPLETE_TX_DOT, InstructionType.WARP_LEVEL,
                                                        [OperandType.MEMORY]),
+    # Additional mbarrier instructions
+    Opcode.MBARRIER_ARRIVE_DROP: InstructionFormat("MBARRIER_ARRIVE_DROP", Opcode.MBARRIER_ARRIVE_DROP, InstructionType.WARP_LEVEL,
+                                                   [OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.MBARRIER_ARRIVE_DROP_DOT: InstructionFormat("mbarrier.arrive_drop", Opcode.MBARRIER_ARRIVE_DROP_DOT, InstructionType.WARP_LEVEL,
+                                                       [OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.MBARRIER_TRY_WAIT: InstructionFormat("MBARRIER_TRY_WAIT", Opcode.MBARRIER_TRY_WAIT, InstructionType.WARP_LEVEL,
+                                                [OperandType.MEMORY, OperandType.REGISTER]),
+    Opcode.MBARRIER_TRY_WAIT_DOT: InstructionFormat("mbarrier.try_wait", Opcode.MBARRIER_TRY_WAIT_DOT, InstructionType.WARP_LEVEL,
+                                                    [OperandType.MEMORY, OperandType.REGISTER]),
+    Opcode.MBARRIER_PENDING_COUNT: InstructionFormat("MBARRIER_PENDING_COUNT", Opcode.MBARRIER_PENDING_COUNT, InstructionType.WARP_LEVEL,
+                                                     [OperandType.MEMORY, OperandType.REGISTER]),
+    Opcode.MBARRIER_PENDING_COUNT_DOT: InstructionFormat("mbarrier.pending_count", Opcode.MBARRIER_PENDING_COUNT_DOT, InstructionType.WARP_LEVEL,
+                                                         [OperandType.MEMORY, OperandType.REGISTER]),
+    Opcode.CP_ASYNC_MBARRIER_ARRIVE: InstructionFormat("CP_ASYNC_MBARRIER_ARRIVE", Opcode.CP_ASYNC_MBARRIER_ARRIVE, InstructionType.MEMORY,
+                                                       [OperandType.MEMORY, OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.CP_ASYNC_MBARRIER_ARRIVE_DOT: InstructionFormat("cp.async.mbarrier.arrive", Opcode.CP_ASYNC_MBARRIER_ARRIVE_DOT, InstructionType.MEMORY,
+                                                           [OperandType.MEMORY, OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+
+    # ==================== Proxy Fence ====================
+    Opcode.FENCE_PROXY: InstructionFormat("FENCE_PROXY", Opcode.FENCE_PROXY, InstructionType.WARP_LEVEL, []),
+    Opcode.FENCE_PROXY_DOT: InstructionFormat("fence.proxy", Opcode.FENCE_PROXY_DOT, InstructionType.WARP_LEVEL, []),
+    Opcode.FENCE_PROXY_ASYNC: InstructionFormat("FENCE_PROXY_ASYNC", Opcode.FENCE_PROXY_ASYNC, InstructionType.WARP_LEVEL, []),
+    Opcode.FENCE_PROXY_ASYNC_DOT: InstructionFormat("fence.proxy.async", Opcode.FENCE_PROXY_ASYNC_DOT, InstructionType.WARP_LEVEL, []),
+    Opcode.FENCE_PROXY_TENSORMAP: InstructionFormat("FENCE_PROXY_TENSORMAP", Opcode.FENCE_PROXY_TENSORMAP, InstructionType.WARP_LEVEL, []),
+    Opcode.FENCE_PROXY_TENSORMAP_DOT: InstructionFormat("fence.proxy.tensormap", Opcode.FENCE_PROXY_TENSORMAP_DOT, InstructionType.WARP_LEVEL, []),
+
+    # ==================== TMA (Tensor Memory Accelerator) ====================
+    Opcode.CP_ASYNC_BULK: InstructionFormat("CP_ASYNC_BULK", Opcode.CP_ASYNC_BULK, InstructionType.MEMORY,
+                                           [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.CP_ASYNC_BULK_DOT: InstructionFormat("cp.async.bulk", Opcode.CP_ASYNC_BULK_DOT, InstructionType.MEMORY,
+                                                [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.CP_ASYNC_BULK_TENSOR: InstructionFormat("CP_ASYNC_BULK_TENSOR", Opcode.CP_ASYNC_BULK_TENSOR, InstructionType.MEMORY,
+                                                   [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE, OperandType.MEMORY]),
+    Opcode.CP_ASYNC_BULK_TENSOR_DOT: InstructionFormat("cp.async.bulk.tensor", Opcode.CP_ASYNC_BULK_TENSOR_DOT, InstructionType.MEMORY,
+                                                       [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE, OperandType.MEMORY]),
+    Opcode.CP_ASYNC_BULK_PREFETCH: InstructionFormat("CP_ASYNC_BULK_PREFETCH", Opcode.CP_ASYNC_BULK_PREFETCH, InstructionType.MEMORY,
+                                                      [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.CP_ASYNC_BULK_PREFETCH_DOT: InstructionFormat("cp.async.bulk.prefetch", Opcode.CP_ASYNC_BULK_PREFETCH_DOT, InstructionType.MEMORY,
+                                                          [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.CP_ASYNC_BULK_PREFETCH_TENSOR: InstructionFormat("CP_ASYNC_BULK_PREFETCH_TENSOR", Opcode.CP_ASYNC_BULK_PREFETCH_TENSOR, InstructionType.MEMORY,
+                                                             [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE, OperandType.MEMORY]),
+    Opcode.CP_ASYNC_BULK_PREFETCH_TENSOR_DOT: InstructionFormat("cp.async.bulk.prefetch.tensor", Opcode.CP_ASYNC_BULK_PREFETCH_TENSOR_DOT, InstructionType.MEMORY,
+                                                                 [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE, OperandType.MEMORY]),
+    Opcode.CP_REDUCE_ASYNC_BULK: InstructionFormat("CP_REDUCE_ASYNC_BULK", Opcode.CP_REDUCE_ASYNC_BULK, InstructionType.MEMORY,
+                                                   [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.CP_REDUCE_ASYNC_BULK_DOT: InstructionFormat("cp.reduce.async.bulk", Opcode.CP_REDUCE_ASYNC_BULK_DOT, InstructionType.MEMORY,
+                                                       [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.CP_REDUCE_ASYNC_BULK_TENSOR: InstructionFormat("CP_REDUCE_ASYNC_BULK_TENSOR", Opcode.CP_REDUCE_ASYNC_BULK_TENSOR, InstructionType.MEMORY,
+                                                          [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE, OperandType.MEMORY]),
+    Opcode.CP_REDUCE_ASYNC_BULK_TENSOR_DOT: InstructionFormat("cp.reduce.async.bulk.tensor", Opcode.CP_REDUCE_ASYNC_BULK_TENSOR_DOT, InstructionType.MEMORY,
+                                                              [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE, OperandType.MEMORY]),
+    Opcode.CP_ASYNC_BULK_COMMIT_GROUP: InstructionFormat("CP_ASYNC_BULK_COMMIT_GROUP", Opcode.CP_ASYNC_BULK_COMMIT_GROUP, InstructionType.WARP_LEVEL,
+                                                         [OperandType.IMMEDIATE]),
+    Opcode.CP_ASYNC_BULK_COMMIT_GROUP_DOT: InstructionFormat("cp.async.bulk.commit_group", Opcode.CP_ASYNC_BULK_COMMIT_GROUP_DOT, InstructionType.WARP_LEVEL,
+                                                             [OperandType.IMMEDIATE]),
+    Opcode.CP_ASYNC_BULK_WAIT_GROUP: InstructionFormat("CP_ASYNC_BULK_WAIT_GROUP", Opcode.CP_ASYNC_BULK_WAIT_GROUP, InstructionType.WARP_LEVEL,
+                                                       [OperandType.IMMEDIATE]),
+    Opcode.CP_ASYNC_BULK_WAIT_GROUP_DOT: InstructionFormat("cp.async.bulk.wait_group", Opcode.CP_ASYNC_BULK_WAIT_GROUP_DOT, InstructionType.WARP_LEVEL,
+                                                           [OperandType.IMMEDIATE]),
+    Opcode.MULTIMEM_CP_ASYNC_BULK: InstructionFormat("MULTIMEM_CP_ASYNC_BULK", Opcode.MULTIMEM_CP_ASYNC_BULK, InstructionType.MEMORY,
+                                                     [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.MULTIMEM_CP_ASYNC_BULK_DOT: InstructionFormat("multimem.cp.async.bulk", Opcode.MULTIMEM_CP_ASYNC_BULK_DOT, InstructionType.MEMORY,
+                                                         [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.MULTIMEM_CP_REDUCE_ASYNC_BULK: InstructionFormat("MULTIMEM_CP_REDUCE_ASYNC_BULK", Opcode.MULTIMEM_CP_REDUCE_ASYNC_BULK, InstructionType.MEMORY,
+                                                            [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+    Opcode.MULTIMEM_CP_REDUCE_ASYNC_BULK_DOT: InstructionFormat("multimem.cp.reduce.async.bulk", Opcode.MULTIMEM_CP_REDUCE_ASYNC_BULK_DOT, InstructionType.MEMORY,
+                                                                [OperandType.MEMORY, OperandType.MEMORY, OperandType.IMMEDIATE]),
+
+    # ==================== Warpgroup Operations ====================
+    Opcode.WGMMA_FENCE: InstructionFormat("WGMMA_FENCE", Opcode.WGMMA_FENCE, InstructionType.WARP_LEVEL, []),
+    Opcode.WGMMA_FENCE_DOT: InstructionFormat("wgmma.fence", Opcode.WGMMA_FENCE_DOT, InstructionType.WARP_LEVEL, []),
+    Opcode.WGMMA_COMMIT_GROUP: InstructionFormat("WGMMA_COMMIT_GROUP", Opcode.WGMMA_COMMIT_GROUP, InstructionType.WARP_LEVEL, []),
+    Opcode.WGMMA_COMMIT_GROUP_DOT: InstructionFormat("wgmma.commit_group", Opcode.WGMMA_COMMIT_GROUP_DOT, InstructionType.WARP_LEVEL, []),
+    Opcode.WGMMA_WAIT_GROUP: InstructionFormat("WGMMA_WAIT_GROUP", Opcode.WGMMA_WAIT_GROUP, InstructionType.WARP_LEVEL,
+                                              [OperandType.IMMEDIATE]),
+    Opcode.WGMMA_WAIT_GROUP_DOT: InstructionFormat("wgmma.wait_group", Opcode.WGMMA_WAIT_GROUP_DOT, InstructionType.WARP_LEVEL,
+                                                  [OperandType.IMMEDIATE]),
+    Opcode.WGMMA_MMA_ASYNC_SP: InstructionFormat("WGMMA_MMA_ASYNC_SP", Opcode.WGMMA_MMA_ASYNC_SP, InstructionType.TENSOR_CORE,
+                                                 [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER],
+                                                 is_tensor=True),
+    Opcode.WGMMA_MMA_ASYNC_SP_DOT: InstructionFormat("wgmma.mma_async.sp", Opcode.WGMMA_MMA_ASYNC_SP_DOT, InstructionType.TENSOR_CORE,
+                                                     [OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER, OperandType.REGISTER],
+                                                     is_tensor=True),
 
     # ==================== PTX Instructions (from isa.md) ====================
     # Arithmetic
@@ -902,23 +1033,52 @@ def is_barrier_instruction(opcode: Opcode) -> bool:
     """Check if an opcode is a barrier instruction."""
     return opcode in {
         Opcode.BAR, Opcode.BAR_WARP, Opcode.MEMBAR,
+        Opcode.BARRIER, Opcode.BARRIER_CTA, Opcode.BARRIER_CLUSTER,
+        Opcode.FENCE_SC, Opcode.FENCE_ACQ_REL,
+        Opcode.FENCE_PROXY, Opcode.FENCE_PROXY_DOT,
+        Opcode.FENCE_PROXY_ASYNC, Opcode.FENCE_PROXY_ASYNC_DOT,
+        Opcode.FENCE_PROXY_TENSORMAP, Opcode.FENCE_PROXY_TENSORMAP_DOT,
         Opcode.MBARRIER_INIT, Opcode.MBARRIER_INIT_DOT,
         Opcode.MBARRIER_INVAL, Opcode.MBARRIER_INVAL_DOT,
         Opcode.MBARRIER_ARRIVE, Opcode.MBARRIER_ARRIVE_DOT,
+        Opcode.MBARRIER_ARRIVE_DROP, Opcode.MBARRIER_ARRIVE_DROP_DOT,
         Opcode.MBARRIER_TEST_WAIT, Opcode.MBARRIER_TEST_WAIT_DOT,
+        Opcode.MBARRIER_TRY_WAIT, Opcode.MBARRIER_TRY_WAIT_DOT,
+        Opcode.MBARRIER_PENDING_COUNT, Opcode.MBARRIER_PENDING_COUNT_DOT,
         Opcode.MBARRIER_EXPECT_TX, Opcode.MBARRIER_EXPECT_TX_DOT,
-        Opcode.MBARRIER_COMPLETE_TX, Opcode.MBARRIER_COMPLETE_TX_DOT
+        Opcode.MBARRIER_COMPLETE_TX, Opcode.MBARRIER_COMPLETE_TX_DOT,
+        Opcode.CP_ASYNC_MBARRIER_ARRIVE, Opcode.CP_ASYNC_MBARRIER_ARRIVE_DOT,
+        Opcode.WGMMA_FENCE, Opcode.WGMMA_FENCE_DOT,
+        Opcode.WGMMA_COMMIT_GROUP, Opcode.WGMMA_COMMIT_GROUP_DOT,
+        Opcode.WGMMA_WAIT_GROUP, Opcode.WGMMA_WAIT_GROUP_DOT,
     }
 
 
 def is_tma_instruction(opcode: Opcode) -> bool:
     """Check if an opcode is a TMA (Tensor Memory Accelerator) instruction."""
-    return opcode in {Opcode.TMA, Opcode.TMA_LOAD, Opcode.TMA_STORE, Opcode.TMA_WAIT}
+    return opcode in {
+        Opcode.TMA, Opcode.TMA_LOAD, Opcode.TMA_STORE, Opcode.TMA_WAIT,
+        Opcode.CP_ASYNC_BULK, Opcode.CP_ASYNC_BULK_DOT,
+        Opcode.CP_ASYNC_BULK_TENSOR, Opcode.CP_ASYNC_BULK_TENSOR_DOT,
+        Opcode.CP_ASYNC_BULK_PREFETCH, Opcode.CP_ASYNC_BULK_PREFETCH_DOT,
+        Opcode.CP_ASYNC_BULK_PREFETCH_TENSOR, Opcode.CP_ASYNC_BULK_PREFETCH_TENSOR_DOT,
+        Opcode.CP_REDUCE_ASYNC_BULK, Opcode.CP_REDUCE_ASYNC_BULK_DOT,
+        Opcode.CP_REDUCE_ASYNC_BULK_TENSOR, Opcode.CP_REDUCE_ASYNC_BULK_TENSOR_DOT,
+        Opcode.CP_ASYNC_BULK_COMMIT_GROUP, Opcode.CP_ASYNC_BULK_COMMIT_GROUP_DOT,
+        Opcode.CP_ASYNC_BULK_WAIT_GROUP, Opcode.CP_ASYNC_BULK_WAIT_GROUP_DOT,
+        Opcode.MULTIMEM_CP_ASYNC_BULK, Opcode.MULTIMEM_CP_ASYNC_BULK_DOT,
+        Opcode.MULTIMEM_CP_REDUCE_ASYNC_BULK, Opcode.MULTIMEM_CP_REDUCE_ASYNC_BULK_DOT,
+        Opcode.CP_ASYNC_MBARRIER_ARRIVE, Opcode.CP_ASYNC_MBARRIER_ARRIVE_DOT,
+    }
 
 
 def is_wgmma_instruction(opcode: Opcode) -> bool:
     """Check if an opcode is a WGMMA (Warpgroup MMA) instruction."""
-    return opcode in {Opcode.WGMMA, Opcode.WGMMA_MMA, Opcode.WGMMA_MMA_ASYNC}
+    return opcode in {
+        Opcode.WGMMA, Opcode.WGMMA_MMA, Opcode.WGMMA_MMA_ASYNC,
+        Opcode.WGMMA_MMA_ASYNC_SP, Opcode.WGMMA_MMA_ASYNC_SP_DOT,
+        # Note: WGMMA_FENCE, WGMMA_COMMIT_GROUP, WGMMA_WAIT_GROUP are barrier instructions
+    }
 
 
 if __name__ == "__main__":

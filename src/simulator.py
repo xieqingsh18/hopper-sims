@@ -120,6 +120,108 @@ class HopperSimulator:
         instructions = parse_program(lines)
         self.programs[warp_id] = instructions
 
+    def launch_kernel(self,
+                      program: List[str],
+                      grid_dim: tuple,
+                      block_dim: tuple) -> None:
+        """
+        Launch a kernel with CUDA-style grid/block configuration.
+
+        This mimics the CUDA launch syntax:
+            kernel<<<grid_dim, block_dim>>>(args...)
+
+        The kernel is loaded on all warps needed to cover the grid.
+        Special registers (%tid, %ctaid, etc.) are initialized for each thread.
+
+        Args:
+            program: List of assembly instructions (the kernel code)
+            grid_dim: (grid_x, grid_y, grid_z) - number of blocks
+            block_dim: (block_x, block_y, block_z) - threads per block
+
+        Example:
+            # Launch: my_kernel<<<(2, 1, 1), (32, 1, 1)>>>
+            sim.launch_kernel(kernel_code, grid_dim=(2, 1, 1), block_dim=(32, 1, 1))
+            # This creates 2 blocks with 32 threads each (64 total threads)
+        """
+        from .core.thread import SpecialRegister
+
+        grid_x, grid_y, grid_z = grid_dim
+        block_x, block_y, block_z = block_dim
+
+        # Calculate total blocks and threads per block
+        total_blocks = grid_x * grid_y * grid_z
+        threads_per_block = block_x * block_y * block_z
+        total_threads = total_blocks * threads_per_block
+
+        # Calculate how many warps we need
+        warps_per_block = (threads_per_block + 31) // 32  # Ceiling division
+        total_warps = total_blocks * warps_per_block
+
+        print(f"Kernel Launch Configuration:")
+        print(f"  Grid: {grid_dim} ({total_blocks} blocks)")
+        print(f"  Block: {block_dim} ({threads_per_block} threads per block)")
+        print(f"  Total threads: {total_threads}")
+        print(f"  Warps per block: {warps_per_block}")
+        print(f"  Total warps: {total_warps}")
+
+        # Check if we have enough warps in the simulator
+        available_warps = len(self.warps)
+        if total_warps > available_warps:
+            print(f"  Warning: Need {total_warps} warps but only {available_warps} available")
+            total_warps = available_warps
+
+        # Parse the kernel program once
+        instructions = parse_program(program)
+
+        # Load kernel on all participating warps and initialize special registers
+        for warp_idx in range(total_warps):
+            # Calculate which block this warp belongs to
+            block_idx = warp_idx // warps_per_block
+            warp_in_block = warp_idx % warps_per_block
+
+            # Calculate block coordinates (simplified: only x-dimension for now)
+            block_id_x = block_idx % grid_x
+            block_id_y = (block_idx // grid_x) % grid_y
+            block_id_z = block_idx // (grid_x * grid_y)
+
+            # Load program on this warp
+            self.programs[warp_idx] = instructions
+
+            # Initialize special registers for each thread in this warp
+            for lane_id in range(32):
+                # Calculate global thread ID
+                thread_in_block = warp_in_block * 32 + lane_id
+
+                # Skip if this lane doesn't correspond to a valid thread
+                if thread_in_block >= threads_per_block:
+                    continue
+
+                # Thread coordinates within block
+                thread_id_x = thread_in_block % block_x
+                thread_id_y = (thread_in_block // block_x) % block_y
+                thread_id_z = thread_in_block // (block_x * block_y)
+
+                # Calculate 1D thread ID (common in CUDA)
+                tid = thread_id_z * (block_x * block_y) + thread_id_y * block_x + thread_id_x
+
+                # Initialize special registers for this thread
+                thread = self.warps[warp_idx].get_thread(lane_id)
+                thread.init_special_registers(
+                    tid=tid,                         # Thread index within block
+                    ctaid=block_idx,                 # CTA (block) index
+                    ntid=threads_per_block,          # Threads per block
+                    nctaid=total_blocks,             # Total blocks
+                    laneid=lane_id,                  # Lane ID within warp
+                    warpid=warp_in_block,            # Warp ID within CTA
+                    nwarpid=warps_per_block,         # Warps per CTA
+                    smid=0,                          # SM ID (simplified)
+                    nsmid=1,                         # Number of SMs (simplified)
+                    gridid=0                         # Grid ID (simplified)
+                )
+
+        print(f"  Loaded kernel on {total_warps} warps")
+        print(f"  Initialized special registers for all threads")
+
     def set_memory(self, data: bytes, offset: int = 0) -> None:
         """
         Set initial memory contents.

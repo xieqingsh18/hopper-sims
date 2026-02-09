@@ -5,7 +5,7 @@ A thread represents a single CUDA thread executing on the GPU.
 """
 
 from enum import Enum, auto
-from typing import Optional
+from typing import Optional, Dict
 from .register import RegisterFile
 
 
@@ -17,6 +17,25 @@ class ThreadState(Enum):
     DIVERGED = auto()    # Thread has diverged from warp (inactive lane)
 
 
+class SpecialRegister(Enum):
+    """PTX special registers for built-in thread/block information."""
+    # Thread and block indices
+    TID = "tid"              # Thread index within block (threadIdx)
+    CTAID = "ctaid"          # CTA (block) index within grid (blockIdx)
+    NTID = "ntid"            # Number of threads in CTA (blockDim)
+    NCTAID = "nctaid"        # Number of CTAs in grid (gridDim)
+
+    # Warp and lane information
+    LANEID = "laneid"        # Lane ID within warp (0-31)
+    WARPID = "warpid"        # Warp ID within CTA
+    NWARPID = "nwarpid"      # Number of warps in CTA
+
+    # SM and grid information
+    SMID = "smid"            # SM ID
+    NSMID = "nsmid"          # Number of SMs
+    GRIDID = "gridid"        # Unique grid ID
+
+
 class Thread:
     """
     Represents a single GPU thread in the Hopper architecture.
@@ -24,6 +43,7 @@ class Thread:
     Each thread maintains:
     - Program Counter (PC): Points to current instruction
     - Register File: 255 general-purpose registers
+    - Special Registers: Built-in PTX registers (%tid, %ctaid, etc.)
     - State: Current execution state
     - Thread ID: Unique identifier within block
     - Active predicate: For predicated execution
@@ -44,19 +64,75 @@ class Thread:
         self.active = True  # For predicated execution (lane active mask)
         self.pred = True    # Predicate register (for conditional execution)
 
-        # Special registers (simplified model)
-        self._lane_id = thread_id % 32  # Lane ID within warp (0-31)
-        self._warp_id = thread_id // 32  # Warp ID
+        # Special registers (initialized by kernel launch)
+        self.special_regs: Dict[SpecialRegister, int] = {}
+
+    def init_special_registers(self,
+                              tid: int,
+                              ctaid: int,
+                              ntid: int,
+                              nctaid: int,
+                              laneid: int,
+                              warpid: int,
+                              nwarpid: int,
+                              smid: int = 0,
+                              nsmid: int = 1,
+                              gridid: int = 0) -> None:
+        """
+        Initialize special registers based on kernel launch configuration.
+
+        Args:
+            tid: Thread index within block (threadIdx)
+            ctaid: CTA (block) index within grid (blockIdx)
+            ntid: Number of threads in CTA (blockDim)
+            nctaid: Number of CTAs in grid (gridDim)
+            laneid: Lane ID within warp (0-31)
+            warpid: Warp ID within CTA
+            nwarpid: Number of warps in CTA
+            smid: SM ID (default 0)
+            nsmid: Number of SMs (default 1)
+            gridid: Grid ID (default 0)
+        """
+        self.special_regs = {
+            SpecialRegister.TID: tid,
+            SpecialRegister.CTAID: ctaid,
+            SpecialRegister.NTID: ntid,
+            SpecialRegister.NCTAID: nctaid,
+            SpecialRegister.LANEID: laneid,
+            SpecialRegister.WARPID: warpid,
+            SpecialRegister.NWARPID: nwarpid,
+            SpecialRegister.SMID: smid,
+            SpecialRegister.NSMID: nsmid,
+            SpecialRegister.GRIDID: gridid,
+        }
+
+    def read_special_reg(self, reg: SpecialRegister) -> int:
+        """Read from a special register."""
+        return self.special_regs.get(reg, 0)
+
+    def write_special_reg(self, reg: SpecialRegister, value: int) -> None:
+        """Write to a special register (mostly read-only, but for flexibility)."""
+        self.special_regs[reg] = value
 
     @property
     def lane_id(self) -> int:
         """Get the lane ID (position within warp)."""
-        return self._lane_id
+        return self.read_special_reg(SpecialRegister.LANEID)
 
     @property
     def warp_id(self) -> int:
-        """Get the warp ID."""
-        return self._warp_id
+        """Get the warp ID within CTA."""
+        return self.read_special_reg(SpecialRegister.WARPID)
+
+    @property
+    def tid(self) -> int:
+        """Get the thread ID within block (threadIdx)."""
+        return self.read_special_reg(SpecialRegister.TID)
+
+    @property
+    def ctaid(self) -> int:
+        """Get the CTA/block ID (blockIdx)."""
+        return self.read_special_reg(SpecialRegister.CTAID)
 
     def read_reg(self, reg_idx: int) -> int:
         """Read from a register."""

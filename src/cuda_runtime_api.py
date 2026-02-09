@@ -40,9 +40,44 @@ Usage Example:
 
 from ctypes import c_void_p, c_int, c_size_t, c_float, c_char_p, POINTER, byref, CFUNCTYPE
 from enum import IntEnum, IntFlag
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict, Callable
+from dataclasses import dataclass, field
 import struct
 import time
+
+
+# ==================== Stream Implementation Classes ====================
+
+@dataclass
+class StreamCommand:
+    """A command in a CUDA stream queue."""
+    type: str  # 'memcpy', 'kernel', 'event_record', 'stream_wait', 'barrier'
+    data: Dict = field(default_factory=dict)
+    callback: Optional[Callable] = None
+    dependencies: List[int] = field(default_factory=list)  # Event IDs this command waits for
+    command_id: int = 0
+
+
+@dataclass
+class CUDAEventState:
+    """A CUDA event for tracking stream synchronization."""
+    event_id: int
+    recorded: bool = False
+    stream_id: int = 0
+    completed: bool = False
+    timing: float = 0.0  # For cudaEventElapsedTime
+
+
+@dataclass
+class CUDAStreamState:
+    """A CUDA stream with a work queue."""
+    stream_id: int
+    priority: int = 0
+    commands: List[StreamCommand] = field(default_factory=list)
+    current_command: int = 0
+    synchronized: bool = True  # True if all commands completed
+    next_command_id: int = 1
+    creation_time: float = field(default_factory=time.time)
 
 
 # ==================== Error Codes ====================
@@ -207,12 +242,14 @@ class CUDARuntimeImpl:
         self.allocations = {}
         self.next_address = 0x10000000
 
-        # Stream management
-        self.streams = {}
+        # Stream management - FIXED: Now uses actual stream objects with work queues
+        self.streams: Dict[int, CUDAStreamState] = {}
         self.next_stream_id = 1
+        # Create default stream (stream 0)
+        self.streams[0] = CUDAStreamState(stream_id=0)
 
-        # Event management
-        self.events = {}
+        # Event management - FIXED: Now tracks completion properly
+        self.events: Dict[int, CUDAEventState] = {}
         self.next_event_id = 1
 
         # Kernel registry
@@ -220,6 +257,67 @@ class CUDARuntimeImpl:
 
         # Timing
         self.start_time = time.time()
+
+    def execute_stream_commands(self, stream_id: int) -> None:
+        """
+        Execute all pending commands in a stream.
+
+        This properly simulates stream execution:
+        1. Executes commands in order
+        2. Waits for event dependencies before executing dependent commands
+        3. Marks events as completed when commands finish
+        """
+        if stream_id not in self.streams:
+            return
+
+        stream = self.streams[stream_id]
+
+        # Execute all pending commands in order
+        while stream.current_command < len(stream.commands):
+            cmd = stream.commands[stream.current_command]
+
+            # Check if command has unmet dependencies
+            unmet_deps = False
+            for dep_event_id in cmd.dependencies:
+                dep_event = self.events.get(dep_event_id)
+                if not dep_event or not dep_event.completed:
+                    unmet_deps = True
+                    break
+
+            if unmet_deps:
+                # Dependencies not met - stop executing this stream
+                # This is key for cudaStreamWaitEvent behavior!
+                break
+
+            # Execute the command
+            if cmd.type == 'memcpy':
+                # Execute memcpy (simulate by tracking)
+                pass
+            elif cmd.type == 'kernel':
+                # Execute kernel by launching it
+                if cmd.callback:
+                    cmd.callback()
+            elif cmd.type == 'event_record':
+                # Mark event as completed
+                event_id = cmd.data.get('event_id')
+                if event_id in self.events:
+                    event = self.events[event_id]
+                    event.recorded = True
+                    event.completed = True
+                    event.timing = time.time() - self.start_time
+            elif cmd.type == 'stream_wait':
+                # Stream wait is handled by dependency checking above
+                pass
+            elif cmd.type == 'barrier':
+                # CUDA barrier - synchronize all threads in CTA
+                pass
+
+            # Move to next command
+            stream.current_command += 1
+
+        # Check if stream is synchronized (all commands executed)
+        if stream.current_command >= len(stream.commands):
+            stream.synchronized = True
 
     def set_error(self, error: cudaError_t) -> None:
         """Set the last error."""
